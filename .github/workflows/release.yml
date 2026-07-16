@@ -71,5 +71,5 @@ jobs:
           gh release create "${{ github.ref_name }}" `
             "dist\installer\VoiceInput-Setup-$version.exe" `
             "dist\installer\VoiceInput-Setup-$version.exe.sha256" `
-            --title "VoiceInput $version — публичная beta" `
+            --title "Речка $version — публичная beta" `
             --generate-notes

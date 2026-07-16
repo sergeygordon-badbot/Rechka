@@ -59,7 +59,7 @@ def _download_file(
 
         metadata = get_hf_file_metadata(metadata_url)
         expected_size = int(metadata.size or expected_size)
-        headers = {"User-Agent": "VoiceInput/0.3.1"}
+        headers = {"User-Agent": "Rechka/0.3.2"}
         if downloaded:
             headers["Range"] = f"bytes={downloaded}-"
 

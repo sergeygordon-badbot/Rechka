@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Речка — голос становится текстом | EBSF</title>
+  <meta name="description" content="Речка — локальный голосовой ввод для Windows 11. Превращает речь в аккуратный текст и понятные промпты для AI.">
+  <meta name="theme-color" content="#f3f1eb">
+  <meta name="robots" content="index,follow">
+  <link rel="canonical" href="https://ebsf.ru/rechka/">
+  <link rel="icon" href="assets/rechka-icon.png">
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="ru_RU">
+  <meta property="og:site_name" content="EBSF">
+  <meta property="og:title" content="Речка — голос становится текстом">
+  <meta property="og:description" content="Локальный голосовой ввод для Windows 11. Говорите свободно — получите точный текст или готовый промпт.">
+  <meta property="og:url" content="https://ebsf.ru/rechka/">
+  <meta name="twitter:card" content="summary">
+  <link rel="stylesheet" href="styles-v3.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Речка",
+    "alternateName": "VoiceInput",
+    "applicationCategory": "UtilitiesApplication",
+    "operatingSystem": "Windows 11 x64",
+    "softwareVersion": "0.3.2",
+    "fileSize": "534 MB",
+    "description": "Локальный голосовой ввод для Windows 11 с обработкой речи и подготовкой промптов для AI.",
+    "downloadUrl": "https://github.com/sergeygordon-badbot/VoiceInput/releases/download/v0.3.2/VoiceInput-Setup-0.3.2.exe",
+    "url": "https://ebsf.ru/rechka/",
+    "offers": {"@type": "Offer", "price": "0", "priceCurrency": "RUB"},
+    "author": {"@type": "Organization", "name": "EBSF"}
+  }
+  </script>
+</head>
+<body>
+  <a class="skip-link" href="#main">К содержанию</a>
+
+  <header class="header">
+    <div class="shell header-inner">
+      <a class="brand" href="#top" aria-label="Речка">
+        <span class="brand-mark" aria-hidden="true">
+          <i></i><i></i><i></i><i></i><i></i>
+        </span>
+        <strong>Речка</strong>
+        <small>EBSF</small>
+      </a>
+
+      <nav aria-label="Разделы страницы">
+        <a href="#meaning">Как работает</a>
+        <a href="#modes">Режимы</a>
+        <a href="#local">Приватность</a>
+      </nav>
+
+      <a class="top-download"
+         href="https://github.com/sergeygordon-badbot/VoiceInput/releases/download/v0.3.2/VoiceInput-Setup-0.3.2.exe">
+        Скачать
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v9m0 0 3.5-3.5M10 12 6.5 8.5M4 16h12"/></svg>
+      </a>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="screen hero" id="top">
+      <div class="shell hero-layout">
+        <div class="hero-copy">
+          <div class="status"><i></i> Windows 11 · публичная beta</div>
+          <h1>
+            Не печатайте.<br>
+            <span>Скажите.</span>
+          </h1>
+          <p>
+            «Речка» слышит ваш поток мыслей, собирает его в цельный текст
+            и вставляет в любое приложение Windows.
+          </p>
+          <div class="hero-actions">
+            <a class="main-button"
+               href="https://github.com/sergeygordon-badbot/VoiceInput/releases/download/v0.3.2/VoiceInput-Setup-0.3.2.exe">
+              Скачать бесплатно
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v9m0 0 3.5-3.5M10 12 6.5 8.5M4 16h12"/></svg>
+            </a>
+            <a class="text-button"
+               href="https://github.com/sergeygordon-badbot/VoiceInput"
+               target="_blank"
+               rel="noopener">
+              Исходный код
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 13 6-6M8 7h5v5"/></svg>
+            </a>
+          </div>
+          <p class="meta">0.3.2 · x64 · 534 МБ · Whisper Small внутри</p>
+        </div>
+
+        <div class="voice-object" aria-label="Визуализация живой записи">
+          <div class="voice-top">
+            <span><i></i> идёт запись</span>
+            <small>локально</small>
+          </div>
+
+          <div class="wave" aria-hidden="true">
+            <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+            <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+            <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+            <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+          </div>
+
+          <p class="live-line" id="live-line">
+            Мне нужно быстро сформулировать мысль…
+          </p>
+
+          <div class="voice-bottom">
+            <span>Ctrl</span><b>+</b><span>Alt</span><b>+</b><span>Пробел</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="hero-note">
+        <div class="shell note-line">
+          <span>01</span>
+          <p>Голос → текст</p>
+          <i></i>
+          <p>Без отправки аудио в облако</p>
+          <i></i>
+          <p>В любом приложении</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="screen meaning" id="meaning">
+      <div class="shell compact">
+        <div class="section-label">
+          <span>02</span>
+          <p>Речь меняется.<br>Текст должен успевать.</p>
+        </div>
+
+        <div class="meaning-flow">
+          <div class="spoken">
+            <small>Вы говорите</small>
+            <p>
+              «Напиши клиенту… нет, лучше коротко. Спроси, получил ли документы
+              и когда сможет ответить. Только без официоза».
+            </p>
+          </div>
+
+          <div class="flow-mark" aria-hidden="true">
+            <span></span>
+            <svg viewBox="0 0 28 28"><path d="M4 14h20m-6-6 6 6-6 6"/></svg>
+          </div>
+
+          <div class="written">
+            <small>Речка вставляет</small>
+            <p>
+              Добрый день! Подскажите, получили ли вы документы
+              и когда сможете дать обратную связь?
+            </p>
+            <em>Смысл сохранён. Оговорки убраны.</em>
+          </div>
+        </div>
+
+        <div class="micro-features">
+          <div><b>Не склеивает куски</b><span>Пересобирает весь черновик</span></div>
+          <div><b>Понимает самокоррекции</b><span>«Нет, лучше так…»</span></div>
+          <div><b>Вставляет сразу</b><span>В активное поле Windows</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="screen modes" id="modes">
+      <div class="shell compact">
+        <div class="section-label section-label-light">
+          <span>03</span>
+          <p>Один голос.<br>Два уровня обработки.</p>
+        </div>
+
+        <div class="mode-panels">
+          <article class="mode mode-human">
+            <div class="mode-head">
+              <span>Общение</span>
+              <i>01</i>
+            </div>
+            <h2>Как вы сказали.<br><em>Только точнее.</em></h2>
+            <p>
+              Сохраняет вашу манеру речи, убирает повторы, слова-паразиты,
+              явные оговорки и расставляет пунктуацию.
+            </p>
+            <div class="mode-tags">
+              <span>Почта</span><span>Чаты</span><span>Документы</span><span>Поиск</span>
+            </div>
+          </article>
+
+          <article class="mode mode-ai">
+            <div class="mode-head">
+              <span>Промпт для AI</span>
+              <i>02</i>
+            </div>
+            <h2>Как вы задумали.<br><em>Только структурно.</em></h2>
+            <p>
+              Выделяет цель, контекст, требования и формат результата.
+              Подстраивает запрос под ChatGPT, Claude или Gemini.
+            </p>
+            <div class="mode-tags">
+              <span>Цель</span><span>Контекст</span><span>Ограничения</span><span>Формат</span>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="screen local" id="local">
+      <div class="shell local-layout">
+        <div class="section-label">
+          <span>04</span>
+          <p>Голос — личное.<br>Таким и останется.</p>
+        </div>
+
+        <div class="local-main">
+          <div class="orbit" aria-hidden="true">
+            <span class="orbit-a"></span>
+            <span class="orbit-b"></span>
+            <div>
+              <svg viewBox="0 0 24 24"><path d="M7 10V8a5 5 0 0 1 10 0v2m-9 0h8a2 2 0 0 1 2 2v7H6v-7a2 2 0 0 1 2-2Z"/></svg>
+            </div>
+          </div>
+
+          <div class="local-copy">
+            <h2>Whisper работает<br>на вашем компьютере.</h2>
+            <p>
+              Аудио и расшифровки не отправляются на сервер EBSF.
+              Интернет нужен для загрузки моделей и обновлений.
+            </p>
+            <a href="https://github.com/sergeygordon-badbot/VoiceInput/blob/main/PRIVACY.md"
+               target="_blank"
+               rel="noopener">
+              Политика конфиденциальности
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 13 6-6M8 7h5v5"/></svg>
+            </a>
+          </div>
+        </div>
+
+        <div class="local-rail">
+          <div><span>На устройстве</span><b>Распознавание</b></div>
+          <div><span>На устройстве</span><b>Очистка текста</b></div>
+          <div><span>По желанию</span><b>Ollama + Qwen</b></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="screen finish" id="download">
+      <div class="shell finish-layout">
+        <div>
+          <div class="section-label section-label-light">
+            <span>05</span>
+            <p>Готово к первой диктовке.</p>
+          </div>
+          <h2>Скажите то,<br>что хотели написать.</h2>
+        </div>
+
+        <div class="download-box">
+          <span>Речка 0.3.2</span>
+          <dl>
+            <div><dt>Система</dt><dd>Windows 11 x64</dd></div>
+            <div><dt>Размер</dt><dd>534 МБ</dd></div>
+            <div><dt>Распознавание</dt><dd>Whisper Small</dd></div>
+            <div><dt>Стоимость</dt><dd>Бесплатно</dd></div>
+          </dl>
+          <a href="https://github.com/sergeygordon-badbot/VoiceInput/releases/download/v0.3.2/VoiceInput-Setup-0.3.2.exe">
+            Скачать установщик
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v9m0 0 3.5-3.5M10 12 6.5 8.5M4 16h12"/></svg>
+          </a>
+          <small>
+            Windows SmartScreen может показать предупреждение:
+            установщик пока не подписан коммерческим сертификатом.
+          </small>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="shell footer-inner">
+      <a class="brand" href="#top">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+        <strong>Речка</strong>
+      </a>
+      <p>Говорите — текст потечёт.</p>
+      <div>
+        <a href="/">EBSF</a>
+        <a href="https://github.com/sergeygordon-badbot/VoiceInput" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/sergeygordon-badbot/VoiceInput/issues" target="_blank" rel="noopener">Поддержка</a>
+      </div>
+    </div>
+  </footer>
+
+  <script src="motion-v3.js"></script>
+</body>
+</html>

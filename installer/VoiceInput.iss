@@ -1,9 +1,9 @@
-#define MyAppName "Голосовой ввод"
+#define MyAppName "Речка"
 #define MyAppExeName "VoiceInput.exe"
 #ifndef MyAppVersion
-#define MyAppVersion "0.3.1"
+#define MyAppVersion "0.3.2"
 #endif
-#define MyAppPublisher "VoiceInput"
+#define MyAppPublisher "EBSF"
 
 [Setup]
 AppId={{D4ACD420-4548-4D21-9FA9-3AA5BA7896D5}
@@ -54,6 +54,10 @@ Source: "..\dist\VoiceInput-{#MyAppVersion}\VoiceInput\*"; DestDir: "{app}"; Fla
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
+
+[InstallDelete]
+Type: files; Name: "{autoprograms}\Голосовой ввод.lnk"
+Type: files; Name: "{autodesktop}\Голосовой ввод.lnk"
 
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "VoiceInput"; Flags: uninsdeletevalue dontcreatekey

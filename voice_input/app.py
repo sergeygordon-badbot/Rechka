@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QCloseEvent, QColor, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtGui import QAction, QCloseEvent, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -174,7 +174,7 @@ class VoiceInputApp:
             self.window.show()
 
     def _build_window(self) -> None:
-        self.window.setWindowTitle("Голосовой ввод")
+        self.window.setWindowTitle("Речка")
         self.window.resize(670, 720)
         self.window.setMinimumSize(610, 650)
         self.window.setStyleSheet(
@@ -254,7 +254,7 @@ class VoiceInputApp:
         root_layout.setContentsMargins(24, 18, 24, 20)
         root_layout.setSpacing(10)
 
-        title = QLabel("Голосовой ввод")
+        title = QLabel("Речка")
         title.setStyleSheet(f"color: {TEXT}; font-size: 17pt; font-weight: 600;")
         root_layout.addWidget(title)
 
@@ -562,28 +562,37 @@ class VoiceInputApp:
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(TEXT))
-        painter.drawRoundedRect(3, 3, 58, 58, 14, 14)
+        painter.setBrush(QColor("#C7FF36"))
+        painter.drawRoundedRect(6, 6, 54, 54, 14, 14)
+        painter.setBrush(QColor("#F3F1EB"))
+        painter.drawRoundedRect(3, 3, 54, 54, 14, 14)
+        painter.setBrush(QColor("#171816"))
+        painter.drawRoundedRect(11, 11, 40, 40, 11, 11)
 
-        painter.setBrush(QColor("white"))
-        for x, y, width, height, radius in (
-            (16, 26, 4, 12, 2),
-            (23, 20, 4, 24, 2),
-            (30, 14, 4, 36, 2),
-            (37, 20, 4, 24, 2),
-            (44, 26, 4, 12, 2),
+        for index, (x, y, width, height, radius) in enumerate(
+            (
+                (17, 24, 3, 11, 2),
+                (23, 20, 3, 19, 2),
+                (29, 16, 3, 27, 2),
+                (35, 20, 3, 19, 2),
+                (41, 24, 3, 11, 2),
+            )
         ):
+            painter.setBrush(QColor("#C7FF36" if index % 2 == 0 else "#71E5BD"))
             painter.drawRoundedRect(x, y, width, height, radius, radius)
 
-        painter.setPen(QPen(QColor("white"), 3))
+        painter.setBrush(QColor("#F3F1EB"))
+        painter.drawRoundedRect(17, 43, 29, 2, 1, 1)
+        painter.drawRoundedRect(25, 47, 21, 2, 1, 1)
+        painter.drawEllipse(43, 43, 16, 16)
         painter.setBrush(QColor(color))
-        painter.drawEllipse(45, 45, 14, 14)
+        painter.drawEllipse(47, 47, 8, 8)
         painter.end()
         return QIcon(pixmap)
 
     def _start_tray(self) -> None:
         self.tray = QSystemTrayIcon(self._make_icon(ACCENT), self.window)
-        self.tray.setToolTip("Голосовой ввод")
+        self.tray.setToolTip("Речка")
         menu = QMenu()
         toggle_action = QAction("Начать / остановить", menu)
         toggle_action.triggered.connect(lambda: self.events.put(("toggle", None)))

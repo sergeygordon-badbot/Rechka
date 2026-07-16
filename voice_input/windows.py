@@ -357,7 +357,7 @@ def create_single_instance_mutex() -> tuple[int, bool]:
     return int(handle or 0), already_exists
 
 
-def message_box(text: str, title: str = "Голосовой ввод") -> None:
+def message_box(text: str, title: str = "Речка") -> None:
     user32.MessageBoxW(None, text, title, 0x00000040)
 
 
