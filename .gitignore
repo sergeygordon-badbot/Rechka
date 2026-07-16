@@ -1,0 +1,11 @@
+.venv/
+.tools/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+build/
+dist/
+*.spec
+models/
+test-output/
+release.json
