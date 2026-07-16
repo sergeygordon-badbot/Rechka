@@ -98,24 +98,38 @@ def run_gui(minimized: bool) -> int:
 
     from voice_input.app import VoiceInputApp
     from voice_input.windows import (
+        close_handle,
+        create_show_settings_event,
         create_single_instance_mutex,
         message_box,
+        signal_show_settings_event,
     )
 
     mutex, already_running = create_single_instance_mutex()
     if already_running:
-        message_box("Программа уже запущена и находится в области уведомлений.")
+        if not signal_show_settings_event():
+            message_box(
+                "Программа уже запущена. Откройте «Речку» через значок "
+                "в области уведомлений."
+            )
+        close_handle(mutex)
         return 0
 
+    show_settings_event = create_show_settings_event()
     application = QApplication(sys.argv)
     application.setQuitOnLastWindowClosed(False)
-    app = VoiceInputApp(application, start_minimized=minimized)
+    app = VoiceInputApp(
+        application,
+        start_minimized=minimized,
+        show_settings_event=show_settings_event,
+    )
     try:
         return application.exec()
     finally:
         if not app._closing:
             app.exit_app()
-        del mutex
+        close_handle(show_settings_event)
+        close_handle(mutex)
 
 
 def main() -> int:

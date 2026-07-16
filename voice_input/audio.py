@@ -19,6 +19,9 @@ class AudioClip:
     samples: np.ndarray
     duration_seconds: float
     rms: float
+    start_sample: int = 0
+    total_samples: int = 0
+    status_messages: tuple[str, ...] = ()
 
 
 def resample_audio(
@@ -79,6 +82,7 @@ class AudioRecorder:
         self._chunks: list[np.ndarray] = []
         self._stream: sd.InputStream | None = None
         self._sample_rate = TARGET_SAMPLE_RATE
+        self._total_frames = 0
         self._status_messages: list[str] = []
         self._current_level = 0.0
 
@@ -90,6 +94,13 @@ class AudioRecorder:
     def current_level(self) -> float:
         with self._lock:
             return self._current_level
+
+    @property
+    def sample_count(self) -> int:
+        with self._lock:
+            return round(
+                self._total_frames * TARGET_SAMPLE_RATE / self._sample_rate
+            )
 
     def start(self, device_index: int | None = None) -> int:
         if self._stream is not None:
@@ -110,6 +121,7 @@ class AudioRecorder:
 
         with self._lock:
             self._chunks = []
+            self._total_frames = 0
             self._status_messages = []
             self._current_level = 0.0
 
@@ -132,6 +144,7 @@ class AudioRecorder:
             normalized_level = max(rms_level, peak_level * 0.72)
             with self._lock:
                 self._chunks.append(channel.copy())
+                self._total_frames += channel.size
                 if normalized_level >= self._current_level:
                     self._current_level = (
                         normalized_level * 0.78 + self._current_level * 0.22
@@ -154,13 +167,43 @@ class AudioRecorder:
         self._stream = stream
         return sample_rate
 
-    def snapshot(self) -> AudioClip:
+    def snapshot(self, start_sample: int = 0) -> AudioClip:
         with self._lock:
-            chunks = [chunk.copy() for chunk in self._chunks]
             sample_rate = self._sample_rate
+            total_frames = self._total_frames
+            source_start = min(
+                total_frames,
+                max(
+                    0,
+                    int(start_sample * sample_rate / TARGET_SAMPLE_RATE),
+                ),
+            )
+            chunks: list[np.ndarray] = []
+            cursor = 0
+            for chunk in self._chunks:
+                chunk_end = cursor + chunk.size
+                if chunk_end > source_start:
+                    offset = max(0, source_start - cursor)
+                    chunks.append(chunk[offset:].copy())
+                cursor = chunk_end
+            status_messages = tuple(self._status_messages)
+
+        actual_start = round(
+            source_start * TARGET_SAMPLE_RATE / sample_rate
+        )
+        total_samples = round(
+            total_frames * TARGET_SAMPLE_RATE / sample_rate
+        )
 
         if not chunks:
-            return AudioClip(np.empty(0, dtype=np.float32), 0.0, 0.0)
+            return AudioClip(
+                np.empty(0, dtype=np.float32),
+                0.0,
+                0.0,
+                start_sample=actual_start,
+                total_samples=total_samples,
+                status_messages=status_messages,
+            )
 
         source = np.concatenate(chunks).astype(np.float32, copy=False)
         samples = resample_audio(source, sample_rate, TARGET_SAMPLE_RATE)
@@ -170,7 +213,14 @@ class AudioRecorder:
             if samples.size
             else 0.0
         )
-        return AudioClip(samples=samples, duration_seconds=duration, rms=rms)
+        return AudioClip(
+            samples=samples,
+            duration_seconds=duration,
+            rms=rms,
+            start_sample=actual_start,
+            total_samples=total_samples,
+            status_messages=status_messages,
+        )
 
     def stop(self) -> AudioClip:
         stream = self._stream
@@ -186,16 +236,34 @@ class AudioRecorder:
         with self._lock:
             chunks = self._chunks
             self._chunks = []
+            total_frames = self._total_frames
+            self._total_frames = 0
+            status_messages = tuple(self._status_messages)
+            self._status_messages = []
             self._current_level = 0.0
 
         if not chunks:
-            return AudioClip(np.empty(0, dtype=np.float32), 0.0, 0.0)
+            return AudioClip(
+                np.empty(0, dtype=np.float32),
+                0.0,
+                0.0,
+                total_samples=round(
+                    total_frames * TARGET_SAMPLE_RATE / self._sample_rate
+                ),
+                status_messages=status_messages,
+            )
 
         source = np.concatenate(chunks).astype(np.float32, copy=False)
         samples = resample_audio(source, self._sample_rate, TARGET_SAMPLE_RATE)
         duration = samples.size / TARGET_SAMPLE_RATE
         rms = float(np.sqrt(np.mean(np.square(samples), dtype=np.float64))) if samples.size else 0.0
-        return AudioClip(samples=samples, duration_seconds=duration, rms=rms)
+        return AudioClip(
+            samples=samples,
+            duration_seconds=duration,
+            rms=rms,
+            total_samples=samples.size,
+            status_messages=status_messages,
+        )
 
     def abort(self) -> None:
         stream = self._stream
@@ -207,4 +275,6 @@ class AudioRecorder:
                 stream.close()
         with self._lock:
             self._chunks = []
+            self._total_frames = 0
+            self._status_messages = []
             self._current_level = 0.0

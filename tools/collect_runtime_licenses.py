@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import os
+import stat
 import time
 import urllib.request
 from importlib import metadata
@@ -59,7 +60,7 @@ def _download_qt_license(path: str) -> str:
     )
     headers = {
         "Accept": "application/vnd.github.raw+json",
-        "User-Agent": "Rechka-License-Collector/0.3.3",
+        "User-Agent": "Rechka-License-Collector/0.3.4",
         "X-GitHub-Api-Version": "2022-11-28",
     }
     token = os.environ.get("GITHUB_TOKEN", "").strip()
@@ -86,7 +87,11 @@ def _download_qt_license(path: str) -> str:
 
 def main() -> int:
     if OUTPUT.exists():
-        shutil.rmtree(OUTPUT)
+        def remove_readonly(function, path, _error) -> None:
+            os.chmod(path, stat.S_IWRITE)
+            function(path)
+
+        shutil.rmtree(OUTPUT, onexc=remove_readonly)
     OUTPUT.mkdir(parents=True)
 
     for distribution_name in RUNTIME_DISTRIBUTIONS:

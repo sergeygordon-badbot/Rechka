@@ -36,10 +36,14 @@ CF_UNICODETEXT = 13
 GMEM_MOVEABLE = 0x0002
 ERROR_ALREADY_EXISTS = 183
 ERROR_INSUFFICIENT_BUFFER = 122
+EVENT_MODIFY_STATE = 0x0002
+SYNCHRONIZE = 0x00100000
+WAIT_OBJECT_0 = 0x00000000
 GWL_EXSTYLE = -20
 WS_EX_TOOLWINDOW = 0x00000080
 WS_EX_NOACTIVATE = 0x08000000
 SW_SHOWNOACTIVATE = 4
+SHOW_SETTINGS_EVENT_NAME = "Local\\VoiceInputShowSettings"
 
 ULONG_PTR = ctypes.c_ulonglong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_ulong
 
@@ -117,6 +121,21 @@ kernel32.GetCurrentThreadId.argtypes = ()
 kernel32.GetCurrentThreadId.restype = wintypes.DWORD
 kernel32.CreateMutexW.argtypes = (ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR)
 kernel32.CreateMutexW.restype = wintypes.HANDLE
+kernel32.CreateEventW.argtypes = (
+    ctypes.c_void_p,
+    wintypes.BOOL,
+    wintypes.BOOL,
+    wintypes.LPCWSTR,
+)
+kernel32.CreateEventW.restype = wintypes.HANDLE
+kernel32.OpenEventW.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR)
+kernel32.OpenEventW.restype = wintypes.HANDLE
+kernel32.SetEvent.argtypes = (wintypes.HANDLE,)
+kernel32.SetEvent.restype = wintypes.BOOL
+kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+kernel32.WaitForSingleObject.restype = wintypes.DWORD
+kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+kernel32.CloseHandle.restype = wintypes.BOOL
 kernel32.GetLogicalProcessorInformationEx.argtypes = (
     ctypes.c_int,
     ctypes.c_void_p,
@@ -349,6 +368,48 @@ def create_single_instance_mutex() -> tuple[int, bool]:
     handle = kernel32.CreateMutexW(None, False, "Local\\VoiceInputDesktopApp")
     already_exists = ctypes.get_last_error() == ERROR_ALREADY_EXISTS
     return int(handle or 0), already_exists
+
+
+def create_show_settings_event() -> int:
+    handle = kernel32.CreateEventW(
+        None,
+        False,
+        False,
+        SHOW_SETTINGS_EVENT_NAME,
+    )
+    if not handle:
+        raise OSError(
+            ctypes.get_last_error(),
+            "Не удалось создать канал открытия настроек",
+        )
+    return int(handle)
+
+
+def signal_show_settings_event() -> bool:
+    for _ in range(10):
+        handle = kernel32.OpenEventW(
+            EVENT_MODIFY_STATE | SYNCHRONIZE,
+            False,
+            SHOW_SETTINGS_EVENT_NAME,
+        )
+        if handle:
+            try:
+                return bool(kernel32.SetEvent(handle))
+            finally:
+                kernel32.CloseHandle(handle)
+        time.sleep(0.05)
+    return False
+
+
+def consume_show_settings_event(handle: int) -> bool:
+    if not handle:
+        return False
+    return kernel32.WaitForSingleObject(handle, 0) == WAIT_OBJECT_0
+
+
+def close_handle(handle: int) -> None:
+    if handle:
+        kernel32.CloseHandle(handle)
 
 
 def message_box(text: str, title: str = "Речка") -> None:

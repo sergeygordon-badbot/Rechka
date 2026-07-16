@@ -2,8 +2,8 @@ const liveLine = document.querySelector("#live-line");
 
 const phrases = [
   "Мне нужно быстро сформулировать мысль…",
-  "Нет, лучше сказать короче и точнее…",
-  "Собери это в готовое сообщение.",
+  "Запиши эту мысль для документа…",
+  "Собери из этого понятную задачу для ИИ.",
 ];
 
 if (liveLine && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {

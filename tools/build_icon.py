@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 
 def create_icon(size: int = 1024) -> Image.Image:
@@ -81,6 +81,90 @@ def svg_icon() -> str:
 """
 
 
+def _font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    names = (
+        "C:/Windows/Fonts/seguisb.ttf" if bold
+        else "C:/Windows/Fonts/segoeui.ttf",
+        "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
+    )
+    for name in names:
+        try:
+            return ImageFont.truetype(name, size=size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def create_installer_wizard() -> Image.Image:
+    width, height = 492, 942
+    image = Image.new("RGB", (width, height), "#F3F1EB")
+    draw = ImageDraw.Draw(image)
+
+    draw.rounded_rectangle(
+        (78, 108, 450, 635),
+        radius=92,
+        fill="#C7FF36",
+    )
+    draw.rounded_rectangle(
+        (42, 76, 414, 603),
+        radius=92,
+        fill="#171816",
+    )
+    draw.ellipse(
+        (82, 166, 374, 458),
+        outline="#454641",
+        width=2,
+    )
+
+    center_y = 310
+    heights = (46, 92, 144, 84, 132, 72, 118, 56, 96)
+    colors = ("#71E5BD", "#C7FF36")
+    start_x = 111
+    for index, bar_height in enumerate(heights):
+        x = start_x + index * 27
+        draw.rounded_rectangle(
+            (
+                x,
+                center_y - bar_height // 2,
+                x + 10,
+                center_y + bar_height // 2,
+            ),
+            radius=5,
+            fill=colors[index % 2],
+        )
+
+    draw.text(
+        (46, 682),
+        "РЕЧКА",
+        font=_font(58, bold=True),
+        fill="#171816",
+    )
+    draw.text(
+        (48, 758),
+        "Голос становится",
+        font=_font(26, bold=True),
+        fill="#171816",
+    )
+    draw.text(
+        (48, 794),
+        "готовым текстом.",
+        font=_font(26, bold=True),
+        fill="#171816",
+    )
+    draw.rounded_rectangle(
+        (48, 859, 165, 894),
+        radius=17,
+        fill="#171816",
+    )
+    draw.text(
+        (67, 866),
+        "ЛОКАЛЬНО",
+        font=_font(14, bold=True),
+        fill="#C7FF36",
+    )
+    return image
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -96,6 +180,8 @@ def main() -> int:
     png_path = args.output_dir / "voiceinput.png"
     ico_path = args.output_dir / "voiceinput.ico"
     svg_path = args.output_dir / "voiceinput.svg"
+    wizard_path = args.output_dir / "installer-wizard.png"
+    wizard_small_path = args.output_dir / "installer-small.png"
     source.resize((512, 512), Image.Resampling.LANCZOS).save(png_path)
     source.save(
         ico_path,
@@ -103,12 +189,18 @@ def main() -> int:
         sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)],
     )
     svg_path.write_text(svg_icon(), encoding="utf-8")
+    create_installer_wizard().save(wizard_path)
+    source.resize((256, 256), Image.Resampling.LANCZOS).save(
+        wizard_small_path
+    )
     if args.site_icon:
         args.site_icon.parent.mkdir(parents=True, exist_ok=True)
         source.resize((512, 512), Image.Resampling.LANCZOS).save(args.site_icon)
     print(png_path.resolve())
     print(ico_path.resolve())
     print(svg_path.resolve())
+    print(wizard_path.resolve())
+    print(wizard_small_path.resolve())
     return 0
 
 

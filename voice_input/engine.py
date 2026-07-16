@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import threading
+from dataclasses import dataclass
 from collections.abc import Callable
 from pathlib import Path
 
@@ -25,6 +26,13 @@ from .windows import physical_core_count
 
 
 StatusCallback = Callable[[str], None]
+
+
+@dataclass(frozen=True, slots=True)
+class TranscriptSegment:
+    start: float
+    end: float
+    text: str
 
 
 def apply_voice_commands(text: str) -> str:
@@ -163,6 +171,24 @@ class WhisperEngine:
         punctuation_commands: bool = True,
         preview: bool = False,
     ) -> str:
+        segments = self.transcribe_segments(
+            samples,
+            language=language,
+            beam_size=beam_size,
+            custom_terms=custom_terms,
+            preview=preview,
+        )
+        text = " ".join(segment.text for segment in segments)
+        return normalize_transcript(text, punctuation_commands=punctuation_commands)
+
+    def transcribe_segments(
+        self,
+        samples: np.ndarray,
+        language: str = "ru",
+        beam_size: int = 1,
+        custom_terms: str = "",
+        preview: bool = False,
+    ) -> list[TranscriptSegment]:
         model = self._model
         if model is None:
             raise RuntimeError("Модель ещё не загружена")
@@ -182,19 +208,27 @@ class WhisperEngine:
                 condition_on_previous_text=False if preview else prepared.size > 28 * 16_000,
                 vad_filter=not preview,
                 vad_parameters={
-                    "min_silence_duration_ms": 250 if preview else 600,
-                    "speech_pad_ms": 100 if preview else 250,
+                    "threshold": 0.35,
+                    "min_speech_duration_ms": 120,
+                    "min_silence_duration_ms": 250 if preview else 450,
+                    "speech_pad_ms": 120 if preview else 300,
                 },
                 chunk_length=chunk_length,
                 initial_prompt=prompt,
-                no_speech_threshold=0.5 if preview else 0.6,
+                no_speech_threshold=0.55 if preview else 0.75,
                 log_prob_threshold=-1.0,
                 compression_ratio_threshold=2.4,
-                without_timestamps=True,
+                # With timestamps disabled, faster-whisper may return only the
+                # first configured chunk for recordings longer than 30 seconds.
+                without_timestamps=False,
             )
-            text = " ".join(
-                segment.text.strip()
+            result = [
+                TranscriptSegment(
+                    start=max(0.0, float(segment.start)),
+                    end=max(0.0, float(segment.end)),
+                    text=segment.text.strip(),
+                )
                 for segment in segments
                 if segment.text.strip()
-            )
-        return normalize_transcript(text, punctuation_commands=punctuation_commands)
+            ]
+        return result

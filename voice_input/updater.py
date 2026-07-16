@@ -179,6 +179,9 @@ def download_update(
     destination_dir.mkdir(parents=True, exist_ok=True)
     destination = destination_dir / update.asset.name
     partial = destination.with_suffix(destination.suffix + ".part")
+    for candidate in destination_dir.glob("VoiceInput-Setup-*.exe*"):
+        if candidate not in {destination, partial} and candidate.is_file():
+            candidate.unlink(missing_ok=True)
 
     if destination.exists():
         if (
@@ -248,9 +251,13 @@ def launch_update_installer(path: Path) -> None:
     subprocess.Popen(
         [
             str(resolved),
-            "/SILENT",
+            "/SP-",
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
             "/CLOSEAPPLICATIONS",
+            "/FORCECLOSEAPPLICATIONS",
             "/NORESTART",
+            "/UPDATE=1",
         ],
         close_fds=True,
         creationflags=creation_flags,

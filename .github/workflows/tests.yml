@@ -32,5 +32,8 @@ jobs:
       - name: Run tests
         run: python -m unittest discover -s tests -v
 
+      - name: Check landing SEO
+        run: python tools/check_landing.py
+
       - name: Compile Python sources
         run: python -m compileall -q voice_input main.py tools tests

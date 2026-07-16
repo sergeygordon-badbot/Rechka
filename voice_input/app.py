@@ -16,6 +16,7 @@ from PySide6.QtGui import (
     QKeySequence,
     QPainter,
     QPixmap,
+    QTextCursor,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -32,6 +33,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSystemTrayIcon,
     QTabWidget,
     QTextEdit,
@@ -53,7 +55,11 @@ from .config import (
     load_config,
     save_config,
 )
-from .engine import WhisperEngine, merge_incremental_transcript
+from .engine import (
+    WhisperEngine,
+    merge_incremental_transcript,
+    normalize_transcript,
+)
 from .hotkeys import HOTKEY_OPTIONS, hotkey_label, parse_hotkey
 from .prompting import ProcessedText, process_transcript
 from .updater import (
@@ -66,19 +72,22 @@ from .updater import (
 from .windows import (
     GlobalHotkey,
     autostart_command,
+    consume_show_settings_event,
     insert_text,
     play_feedback,
     set_autostart,
 )
 
 
-BG = "#FFFFFF"
+BG = "#F3F1EB"
 CARD = "#FFFFFF"
-CARD_LIGHT = "#F7F7F8"
-BORDER = "#E5E7EB"
-TEXT = "#202123"
-MUTED = "#6B7280"
-ACCENT = "#202123"
+CARD_LIGHT = "#F8F7F3"
+BORDER = "#DDDAD2"
+TEXT = "#171816"
+MUTED = "#696A63"
+ACCENT = "#171816"
+ACID = "#C7FF36"
+MINT = "#71E5BD"
 RECORD = "#E5484D"
 SUCCESS = "#10A37F"
 
@@ -138,6 +147,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._hide_callback = hide_callback
         self.allow_close = False
+        self.setWindowFlags(
+            Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint
+        )
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self.allow_close:
@@ -147,8 +159,48 @@ class MainWindow(QMainWindow):
         self._hide_callback()
 
 
+class WindowTitleBar(QFrame):
+    def __init__(self, window: MainWindow) -> None:
+        super().__init__()
+        self._window = window
+        self._drag_offset = None
+        self.setObjectName("windowTitleBar")
+        self.setFixedHeight(54)
+
+    def mousePressEvent(self, event: Any) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_offset = (
+                event.globalPosition().toPoint()
+                - self._window.frameGeometry().topLeft()
+            )
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: Any) -> None:
+        if (
+            self._drag_offset is not None
+            and event.buttons() & Qt.MouseButton.LeftButton
+        ):
+            self._window.move(
+                event.globalPosition().toPoint() - self._drag_offset
+            )
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: Any) -> None:
+        self._drag_offset = None
+        super().mouseReleaseEvent(event)
+
+
 class VoiceInputApp:
-    def __init__(self, application: QApplication, start_minimized: bool = False) -> None:
+    def __init__(
+        self,
+        application: QApplication,
+        start_minimized: bool = False,
+        show_settings_event: int = 0,
+    ) -> None:
         self.application = application
         self.config = load_config()
         try:
@@ -171,11 +223,13 @@ class VoiceInputApp:
         self._preview_stop: threading.Event | None = None
         self._recording_started_at = 0.0
         self._latest_preview_text = ""
+        self._recording_warning = ""
         self._active_output_mode = self.config.output_mode
         self._active_ai_target = self.config.ai_target
         self._active_project_context = self.config.project_context
         self._update_repository = configured_repository()
         self._update_in_progress = False
+        self._show_settings_event = show_settings_event
         self.devices: list[dict[str, Any]] = []
 
         self.window = MainWindow(self.hide_window)
@@ -203,8 +257,8 @@ class VoiceInputApp:
 
     def _build_window(self) -> None:
         self.window.setWindowTitle("Речка")
-        self.window.resize(670, 720)
-        self.window.setMinimumSize(610, 650)
+        self.window.resize(760, 760)
+        self.window.setMinimumSize(660, 650)
         self.window.setStyleSheet(
             f"""
             QMainWindow, QWidget {{
@@ -213,36 +267,48 @@ class VoiceInputApp:
                 font-family: "Segoe UI";
                 font-size: 9.5pt;
             }}
+            QFrame#windowTitleBar {{
+                background: {CARD};
+                border: 0;
+                border-bottom: 1px solid {BORDER};
+            }}
+            QFrame#windowTitleBar QLabel {{
+                background: transparent;
+                border: 0;
+            }}
             QTabWidget::pane {{
                 border: 0;
-                border-top: 1px solid {BORDER};
-                background: {CARD};
-                top: -1px;
+                background: transparent;
+                top: 8px;
             }}
             QTabBar::tab {{
-                background: transparent;
+                background: {CARD};
                 color: {MUTED};
-                padding: 8px 2px;
-                margin-right: 24px;
-                border: 0;
-                border-bottom: 2px solid transparent;
+                min-width: 112px;
+                padding: 9px 16px;
+                margin-right: 7px;
+                border: 1px solid {BORDER};
+                border-radius: 17px;
+                font-weight: 600;
             }}
             QTabBar::tab:selected {{
-                color: {TEXT};
-                border-bottom: 2px solid {TEXT};
+                color: white;
+                background: {TEXT};
+                border-color: {TEXT};
             }}
-            QComboBox, QLineEdit, QTextEdit {{
+            QComboBox, QLineEdit, QKeySequenceEdit, QTextEdit {{
                 background: {CARD};
                 color: {TEXT};
                 border: 1px solid {BORDER};
-                border-radius: 8px;
-                padding: 7px 9px;
-                min-height: 18px;
+                border-radius: 10px;
+                padding: 8px 10px;
+                min-height: 20px;
                 selection-background-color: #D1D5DB;
                 selection-color: {TEXT};
             }}
-            QComboBox:focus, QLineEdit:focus, QTextEdit:focus {{
-                border: 1px solid #9CA3AF;
+            QComboBox:focus, QLineEdit:focus, QKeySequenceEdit:focus,
+            QTextEdit:focus {{
+                border: 1px solid {TEXT};
             }}
             QComboBox::drop-down {{
                 border: 0;
@@ -261,8 +327,8 @@ class VoiceInputApp:
                 spacing: 7px;
             }}
             QCheckBox::indicator {{
-                width: 15px;
-                height: 15px;
+                width: 16px;
+                height: 16px;
             }}
             QProgressBar {{
                 background: {CARD_LIGHT};
@@ -274,66 +340,181 @@ class VoiceInputApp:
                 background: {ACCENT};
                 border-radius: 2px;
             }}
+            QScrollArea {{
+                background: transparent;
+                border: 0;
+            }}
+            QScrollBar:vertical {{
+                width: 7px;
+                margin: 2px 0;
+                background: transparent;
+            }}
+            QScrollBar::handle:vertical {{
+                min-height: 32px;
+                border-radius: 3px;
+                background: #C8C6BE;
+            }}
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical {{
+                height: 0;
+            }}
             """
         )
 
         central = QWidget()
         root_layout = QVBoxLayout(central)
-        root_layout.setContentsMargins(24, 18, 24, 20)
-        root_layout.setSpacing(10)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
 
-        title = QLabel("Речка")
-        title.setStyleSheet(f"color: {TEXT}; font-size: 17pt; font-weight: 600;")
-        root_layout.addWidget(title)
+        title_bar = WindowTitleBar(self.window)
+        title_layout = QHBoxLayout(title_bar)
+        title_layout.setContentsMargins(18, 0, 10, 0)
+        title_layout.setSpacing(10)
+
+        icon = self._make_icon(ACCENT)
+        icon_label = QLabel()
+        icon_label.setPixmap(icon.pixmap(30, 30))
+        icon_label.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents,
+            True,
+        )
+        title_layout.addWidget(icon_label)
+
+        brand = QLabel("Речка")
+        brand.setStyleSheet(
+            f"color: {TEXT}; font-size: 12pt; font-weight: 700; border: 0;"
+        )
+        brand.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents,
+            True,
+        )
+        title_layout.addWidget(brand)
+
+        local_badge = QLabel("ЛОКАЛЬНО")
+        local_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        local_badge.setFixedHeight(24)
+        local_badge.setStyleSheet(
+            f"color: {TEXT}; background: {ACID}; border-radius: 8px; "
+            "padding: 0 8px; font-size: 7pt; font-weight: 700;"
+        )
+        local_badge.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents,
+            True,
+        )
+        title_layout.addWidget(local_badge)
+        title_layout.addStretch()
+
+        minimize = QPushButton("—")
+        minimize.setObjectName("windowControl")
+        minimize.setFixedSize(36, 32)
+        minimize.setToolTip("Свернуть")
+        minimize.clicked.connect(self.window.showMinimized)
+        close = QPushButton("×")
+        close.setObjectName("windowControl")
+        close.setFixedSize(36, 32)
+        close.setToolTip("Скрыть в область уведомлений")
+        close.clicked.connect(self.hide_window)
+        for button in (minimize, close):
+            button.setStyleSheet(
+                f"""
+                QPushButton {{
+                    background: transparent;
+                    color: {MUTED};
+                    border: 0;
+                    border-radius: 8px;
+                    font-size: 14pt;
+                }}
+                QPushButton:hover {{
+                    background: {CARD_LIGHT};
+                    color: {TEXT};
+                }}
+                """
+            )
+            title_layout.addWidget(button)
+        root_layout.addWidget(title_bar)
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_dictation_tab(), "Диктовка")
         self.tabs.addTab(self._build_settings_tab(), "Настройки")
+        self.tabs.setDocumentMode(True)
+        self.tabs.setContentsMargins(24, 18, 24, 22)
         root_layout.addWidget(self.tabs, 1)
         self.window.setCentralWidget(central)
 
-        icon = self._make_icon(ACCENT)
         self.window.setWindowIcon(icon)
         self.application.setWindowIcon(icon)
 
     def _build_dictation_tab(self) -> QWidget:
         tab = QWidget()
-        tab.setStyleSheet(f"background: {CARD};")
+        tab.setStyleSheet("background: transparent;")
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(4, 20, 4, 2)
-        layout.setSpacing(10)
+        layout.setContentsMargins(24, 24, 24, 22)
+        layout.setSpacing(14)
+
+        heading = QLabel("Голос в текст")
+        heading.setStyleSheet(
+            f"color: {TEXT}; font-size: 20pt; font-weight: 750; "
+            "letter-spacing: -0.5px;"
+        )
+        layout.addWidget(heading)
+        subtitle = QLabel(
+            "Выберите режим, нажмите горячую клавишу и говорите свободно."
+        )
+        subtitle.setStyleSheet(f"color: {MUTED}; font-size: 9pt;")
+        layout.addWidget(subtitle)
+
+        mode_card = QFrame()
+        mode_card.setStyleSheet(
+            f"QFrame {{ background: {CARD}; border: 1px solid {BORDER}; "
+            "border-radius: 14px; }}"
+            "QLabel { border: 0; background: transparent; }"
+        )
+        mode_layout = QVBoxLayout(mode_card)
+        mode_layout.setContentsMargins(16, 14, 16, 14)
+        mode_layout.setSpacing(9)
 
         mode_row = QHBoxLayout()
         mode_label = QLabel("Режим")
-        mode_label.setStyleSheet(f"color: {TEXT}; font-weight: 500;")
+        mode_label.setStyleSheet(f"color: {TEXT}; font-weight: 650;")
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(list(OUTPUT_MODE_OPTIONS.values()))
-        self.mode_combo.setMinimumWidth(335)
+        self.mode_combo.setMinimumWidth(360)
         mode_row.addWidget(mode_label)
         mode_row.addStretch()
         mode_row.addWidget(self.mode_combo)
-        layout.addLayout(mode_row)
+        mode_layout.addLayout(mode_row)
 
         target_row = QHBoxLayout()
         self.target_label = QLabel("AI-система")
-        self.target_label.setStyleSheet(f"color: {TEXT}; font-weight: 500;")
+        self.target_label.setStyleSheet(f"color: {TEXT}; font-weight: 650;")
         self.target_combo = QComboBox()
         self.target_combo.addItems(list(AI_TARGET_OPTIONS.values()))
-        self.target_combo.setMinimumWidth(335)
+        self.target_combo.setMinimumWidth(360)
         target_row.addWidget(self.target_label)
         target_row.addStretch()
         target_row.addWidget(self.target_combo)
-        layout.addLayout(target_row)
+        mode_layout.addLayout(target_row)
 
         self.mode_description = QLabel()
         self.mode_description.setWordWrap(True)
         self.mode_description.setStyleSheet(f"color: {MUTED}; font-size: 8.5pt;")
-        layout.addWidget(self.mode_description)
+        mode_layout.addWidget(self.mode_description)
+        layout.addWidget(mode_card)
 
+        record_card = QFrame()
+        record_card.setStyleSheet(
+            f"QFrame {{ background: {TEXT}; border: 0; border-radius: 16px; }}"
+            "QLabel { border: 0; background: transparent; }"
+        )
+        record_layout = QVBoxLayout(record_card)
+        record_layout.setContentsMargins(22, 18, 22, 18)
+        record_layout.setSpacing(10)
         self.status_label = QLabel("Подготовка…")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_label.setStyleSheet(f"color: {MUTED}; font-weight: 500;")
-        layout.addWidget(self.status_label)
+        self.status_label.setStyleSheet(
+            "color: #D8D8D2; font-size: 9pt; font-weight: 600;"
+        )
+        record_layout.addWidget(self.status_label)
 
         progress_row = QHBoxLayout()
         progress_row.addStretch()
@@ -342,7 +523,7 @@ class VoiceInputApp:
         self.progress.setFixedWidth(240)
         progress_row.addWidget(self.progress)
         progress_row.addStretch()
-        layout.addLayout(progress_row)
+        record_layout.addLayout(progress_row)
 
         button_row = QHBoxLayout()
         button_row.addStretch()
@@ -351,61 +532,112 @@ class VoiceInputApp:
         self.record_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.record_button.setMinimumWidth(230)
         self.record_button.clicked.connect(self.toggle_recording)
-        self._style_primary_button(self.record_button, ACCENT)
+        self._style_primary_button(self.record_button, ACID)
         button_row.addWidget(self.record_button)
         button_row.addStretch()
-        layout.addLayout(button_row)
+        record_layout.addLayout(button_row)
 
         self.hotkey_hint = QLabel()
         self.hotkey_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.hotkey_hint.setStyleSheet(f"color: {MUTED}; font-size: 8.5pt;")
-        layout.addWidget(self.hotkey_hint)
-        layout.addSpacing(8)
+        self.hotkey_hint.setStyleSheet("color: #A8AAA3; font-size: 8.5pt;")
+        record_layout.addWidget(self.hotkey_hint)
+        layout.addWidget(record_card)
 
+        result_card = QFrame()
+        result_card.setStyleSheet(
+            f"QFrame {{ background: {CARD}; border: 1px solid {BORDER}; "
+            "border-radius: 14px; }}"
+            "QLabel { border: 0; background: transparent; }"
+        )
+        result_layout = QVBoxLayout(result_card)
+        result_layout.setContentsMargins(16, 13, 16, 15)
+        result_layout.setSpacing(9)
+        result_header = QHBoxLayout()
         last_label = QLabel("Последний результат")
-        last_label.setStyleSheet(f"color: {TEXT}; font-weight: 500;")
-        layout.addWidget(last_label)
+        last_label.setStyleSheet(f"color: {TEXT}; font-weight: 650;")
+        result_header.addWidget(last_label)
+        result_header.addStretch()
+        copy_result = QPushButton("Копировать")
+        clear_result = QPushButton("Очистить")
+        for button in (copy_result, clear_result):
+            self._style_secondary_button(button)
+            result_header.addWidget(button)
+        copy_result.clicked.connect(self._copy_last_result)
+        clear_result.clicked.connect(self._clear_last_result)
+        result_layout.addLayout(result_header)
 
         self.last_text = QTextEdit()
         self.last_text.setReadOnly(True)
         self.last_text.setPlainText("Здесь появится распознанный текст.")
-        layout.addWidget(self.last_text, 1)
+        self.last_text.setMinimumHeight(150)
+        result_layout.addWidget(self.last_text, 1)
+        layout.addWidget(result_card, 1)
         return tab
 
     def _build_settings_tab(self) -> QWidget:
-        tab = QWidget()
-        tab.setStyleSheet(f"background: {CARD};")
-        outer = QVBoxLayout(tab)
-        outer.setContentsMargins(4, 18, 4, 2)
-        outer.setSpacing(8)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        scroll.setStyleSheet("background: transparent;")
 
-        form = QFormLayout()
-        form.setHorizontalSpacing(16)
-        form.setVerticalSpacing(8)
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        content = QWidget()
+        content.setStyleSheet("background: transparent;")
+        outer = QVBoxLayout(content)
+        outer.setContentsMargins(24, 24, 17, 22)
+        outer.setSpacing(14)
 
-        self.model_combo = QComboBox()
-        self.model_combo.addItems(list(MODEL_OPTIONS.values()))
-        form.addRow("Модель", self.model_combo)
+        heading = QLabel("Настройки")
+        heading.setStyleSheet(
+            f"color: {TEXT}; font-size: 20pt; font-weight: 750; "
+            "letter-spacing: -0.5px;"
+        )
+        outer.addWidget(heading)
+        subtitle = QLabel(
+            "Горячая клавиша, микрофон, скорость и обработка текста."
+        )
+        subtitle.setStyleSheet(f"color: {MUTED}; font-size: 9pt;")
+        outer.addWidget(subtitle)
 
-        self.decoding_combo = QComboBox()
-        self.decoding_combo.addItems(list(DECODING_OPTIONS.values()))
-        form.addRow("Скорость", self.decoding_combo)
+        def make_section(title: str) -> tuple[QFrame, QVBoxLayout]:
+            frame = QFrame()
+            frame.setStyleSheet(
+                f"QFrame {{ background: {CARD}; border: 1px solid {BORDER}; "
+                "border-radius: 14px; }}"
+                "QLabel, QCheckBox { border: 0; background: transparent; }"
+            )
+            section_layout = QVBoxLayout(frame)
+            section_layout.setContentsMargins(16, 14, 16, 15)
+            section_layout.setSpacing(10)
+            label = QLabel(title)
+            label.setStyleSheet(
+                f"color: {TEXT}; font-size: 10pt; font-weight: 700;"
+            )
+            section_layout.addWidget(label)
+            return frame, section_layout
 
-        self.language_combo = QComboBox()
-        self.language_combo.addItems(list(LANGUAGE_OPTIONS.values()))
-        form.addRow("Язык", self.language_combo)
+        def make_form() -> QFormLayout:
+            form = QFormLayout()
+            form.setHorizontalSpacing(18)
+            form.setVerticalSpacing(9)
+            form.setLabelAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            )
+            form.setFieldGrowthPolicy(
+                QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
+            )
+            form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+            return form
 
-        self.device_combo = QComboBox()
-        form.addRow("Микрофон", self.device_combo)
-
-        self.insertion_combo = QComboBox()
-        self.insertion_combo.addItems(list(INSERTION_OPTIONS.values()))
-        form.addRow("Вставка текста", self.insertion_combo)
-
+        controls, controls_layout = make_section("Управление")
+        controls_form = make_form()
         self.hotkey_combo = QComboBox()
-        self.hotkey_combo.addItems([*HOTKEY_OPTIONS.values(), "Своя комбинация…"])
-        form.addRow("Горячая клавиша", self.hotkey_combo)
+        self.hotkey_combo.addItems(
+            [*HOTKEY_OPTIONS.values(), "Своя комбинация…"]
+        )
+        controls_form.addRow("Горячая клавиша", self.hotkey_combo)
 
         self.hotkey_edit = QKeySequenceEdit()
         self.hotkey_edit.setMaximumSequenceLength(1)
@@ -413,69 +645,125 @@ class VoiceInputApp:
         self.hotkey_edit.setToolTip(
             "Нажмите одну комбинацию. Например Ctrl+Alt+R или Ctrl+Shift+F9."
         )
-        form.addRow("Своя комбинация", self.hotkey_edit)
-        self.hotkey_edit_label = form.labelForField(self.hotkey_edit)
+        controls_form.addRow("Своя комбинация", self.hotkey_edit)
+        self.hotkey_edit_label = controls_form.labelForField(self.hotkey_edit)
         self.hotkey_combo.currentIndexChanged.connect(
             self._update_custom_hotkey_visibility
         )
 
-        self.custom_terms_edit = QLineEdit()
-        self.custom_terms_edit.setPlaceholderText("Например: Codex, PostgreSQL, Гастроконсьерж")
-        form.addRow("Подсказка модели", self.custom_terms_edit)
+        self.insertion_combo = QComboBox()
+        self.insertion_combo.addItems(list(INSERTION_OPTIONS.values()))
+        controls_form.addRow("Вставка текста", self.insertion_combo)
+        controls_layout.addLayout(controls_form)
+        controls_hint = QLabel(
+            "Повторный запуск ярлыка откроет это окно, даже если «Речка» "
+            "уже работает в области уведомлений."
+        )
+        controls_hint.setWordWrap(True)
+        controls_hint.setStyleSheet(f"color: {MUTED}; font-size: 8pt;")
+        controls_layout.addWidget(controls_hint)
+        outer.addWidget(controls)
 
+        recognition, recognition_layout = make_section("Распознавание")
+        recognition_form = make_form()
+        self.model_combo = QComboBox()
+        self.model_combo.addItems(list(MODEL_OPTIONS.values()))
+        recognition_form.addRow("Модель", self.model_combo)
+
+        self.decoding_combo = QComboBox()
+        self.decoding_combo.addItems(list(DECODING_OPTIONS.values()))
+        recognition_form.addRow("Скорость", self.decoding_combo)
+
+        self.language_combo = QComboBox()
+        self.language_combo.addItems(list(LANGUAGE_OPTIONS.values()))
+        recognition_form.addRow("Язык", self.language_combo)
+
+        self.device_combo = QComboBox()
+        recognition_form.addRow("Микрофон", self.device_combo)
+
+        self.custom_terms_edit = QLineEdit()
+        self.custom_terms_edit.setPlaceholderText(
+            "Например: Codex, PostgreSQL, Гастроконсьерж"
+        )
+        recognition_form.addRow("Слова и названия", self.custom_terms_edit)
+        recognition_layout.addLayout(recognition_form)
+        refresh = QPushButton("Обновить список микрофонов")
+        self._style_secondary_button(refresh)
+        refresh.clicked.connect(self._refresh_devices)
+        recognition_layout.addWidget(
+            refresh,
+            alignment=Qt.AlignmentFlag.AlignLeft,
+        )
+        outer.addWidget(recognition)
+
+        processing, processing_layout = make_section("Обработка текста")
+        processing_form = make_form()
         self.project_context_edit = QLineEdit()
         self.project_context_edit.setPlaceholderText(
             "Например: Windows-приложение, Python, важна приватность"
         )
-        form.addRow("Контекст проекта", self.project_context_edit)
+        processing_form.addRow("Контекст проекта", self.project_context_edit)
 
         self.ollama_model_edit = QLineEdit()
         self.ollama_model_edit.setPlaceholderText("qwen3:4b")
-        form.addRow("AI-модель Ollama", self.ollama_model_edit)
-        outer.addLayout(form)
+        processing_form.addRow("AI-модель Ollama", self.ollama_model_edit)
+        processing_layout.addLayout(processing_form)
 
         self.append_space_check = QCheckBox("Добавлять пробел после вставки")
-        self.commands_check = QCheckBox("Понимать «новая строка», «поставь точку»")
+        self.commands_check = QCheckBox(
+            "Понимать «новая строка», «поставь точку»"
+        )
         self.use_local_ai_check = QCheckBox(
-            "Обрабатывать результат через Ollama (качественнее, но заметно медленнее)"
+            "Обрабатывать через Ollama — качественнее, но заметно медленнее"
         )
         self.sound_feedback_check = QCheckBox("Мягкий звук начала и остановки")
-        self.start_minimized_check = QCheckBox("Запускать свёрнутой")
-        self.autostart_check = QCheckBox("Запускать вместе с Windows")
         for check in (
             self.append_space_check,
             self.commands_check,
             self.use_local_ai_check,
             self.sound_feedback_check,
-            self.start_minimized_check,
-            self.autostart_check,
         ):
-            outer.addWidget(check)
+            processing_layout.addWidget(check)
+        outer.addWidget(processing)
 
-        outer.addStretch()
-        actions = QHBoxLayout()
-        refresh = QPushButton("Обновить список микрофонов")
-        self._style_secondary_button(refresh)
-        refresh.clicked.connect(self._refresh_devices)
+        system, system_layout = make_section("Запуск и обновления")
+        self.start_minimized_check = QCheckBox("Запускать свёрнутой")
+        self.autostart_check = QCheckBox("Запускать вместе с Windows")
+        system_layout.addWidget(self.start_minimized_check)
+        system_layout.addWidget(self.autostart_check)
         self.update_button = QPushButton("Проверить обновления")
         self._style_secondary_button(self.update_button)
         self.update_button.clicked.connect(
             lambda: self.check_for_updates(manual=True)
         )
-        save = QPushButton("Сохранить")
+        system_layout.addWidget(
+            self.update_button,
+            alignment=Qt.AlignmentFlag.AlignLeft,
+        )
+        self.update_status = QLabel("Обновления устанавливаются поверх текущей версии.")
+        self.update_status.setWordWrap(True)
+        self.update_status.setStyleSheet(f"color: {MUTED}; font-size: 8pt;")
+        system_layout.addWidget(self.update_status)
+        self.update_progress = QProgressBar()
+        self.update_progress.setRange(0, 100)
+        self.update_progress.setValue(0)
+        self.update_progress.hide()
+        system_layout.addWidget(self.update_progress)
+        outer.addWidget(system)
+
+        actions = QHBoxLayout()
+        version_label = QLabel(f"Версия {__version__}")
+        version_label.setStyleSheet(f"color: {MUTED}; font-size: 8pt;")
+        actions.addWidget(version_label)
+        actions.addStretch()
+        save = QPushButton("Сохранить настройки")
         self._style_primary_button(save, ACCENT, compact=True)
         save.clicked.connect(self.save_settings)
-        actions.addWidget(refresh)
-        actions.addWidget(self.update_button)
-        actions.addStretch()
         actions.addWidget(save)
         outer.addLayout(actions)
 
-        version_label = QLabel(f"Версия {__version__}")
-        version_label.setAlignment(Qt.AlignmentFlag.AlignRight)
-        version_label.setStyleSheet(f"color: {MUTED}; font-size: 8pt;")
-        outer.addWidget(version_label)
-        return tab
+        scroll.setWidget(content)
+        return scroll
 
     def _style_primary_button(
         self,
@@ -485,16 +773,24 @@ class VoiceInputApp:
     ) -> None:
         vertical = 7 if compact else 12
         horizontal = 18 if compact else 28
-        hover = "#C93C41" if color == RECORD else "#343541"
+        if color == RECORD:
+            hover = "#C93C41"
+            text_color = "white"
+        elif color == ACID:
+            hover = "#B7EE31"
+            text_color = TEXT
+        else:
+            hover = "#343541"
+            text_color = "white"
         button.setStyleSheet(
             f"""
             QPushButton {{
                 background: {color};
-                color: white;
+                color: {text_color};
                 border: 1px solid {color};
-                border-radius: 8px;
+                border-radius: 10px;
                 padding: {vertical}px {horizontal}px;
-                font-weight: 500;
+                font-weight: 650;
             }}
             QPushButton:hover {{ background: {hover}; border-color: {hover}; }}
             QPushButton:disabled {{
@@ -571,18 +867,24 @@ class VoiceInputApp:
         self.voice_level = VoiceLevelWidget()
         layout.addWidget(self.voice_level)
 
-        self.overlay_preview = QLabel("Черновик появится через 2–4 секунды.")
-        self.overlay_preview.setWordWrap(True)
-        self.overlay_preview.setAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        self.overlay_preview = QTextEdit()
+        self.overlay_preview.setReadOnly(True)
+        self.overlay_preview.setAcceptRichText(False)
+        self.overlay_preview.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.overlay_preview.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
-        self.overlay_preview.setMinimumHeight(42)
-        self.overlay_preview.setMaximumHeight(76)
+        self.overlay_preview.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.overlay_preview.setFixedHeight(92)
         self.overlay_preview.setStyleSheet(
             f"color: {TEXT}; font-size: 9.5pt; border: 1px solid {BORDER}; "
-            f"background: {CARD_LIGHT}; border-radius: 8px; padding: 7px;"
+            f"background: {CARD_LIGHT}; border-radius: 8px; padding: 7px; "
+            "selection-background-color: transparent;"
         )
         layout.addWidget(self.overlay_preview)
+        self._set_overlay_preview("Черновик появится через несколько секунд.")
         self.overlay.hide()
 
     def _position_overlay(self) -> None:
@@ -603,10 +905,21 @@ class VoiceInputApp:
         self.overlay_state_text.setText(text)
         self.overlay_dot.setStyleSheet(f"color: {color}; font-size: 10pt; border: 0;")
         if preview is not None:
-            self.overlay_preview.setText(preview)
+            self._set_overlay_preview(preview)
         self._position_overlay()
         self.overlay.show()
         self.overlay.raise_()
+
+    def _set_overlay_preview(self, text: str) -> None:
+        self.overlay_preview.setPlainText(text)
+        self.overlay_preview.moveCursor(QTextCursor.MoveOperation.End)
+        self.overlay_preview.ensureCursorVisible()
+        scrollbar = self.overlay_preview.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+        QTimer.singleShot(
+            0,
+            lambda: scrollbar.setValue(scrollbar.maximum()),
+        )
 
     def _make_icon(self, color: str) -> QIcon:
         pixmap = QPixmap(64, 64)
@@ -649,7 +962,9 @@ class VoiceInputApp:
         toggle_action = QAction("Начать / остановить", menu)
         toggle_action.triggered.connect(lambda: self.events.put(("toggle", None)))
         show_action = QAction("Открыть настройки", menu)
-        show_action.triggered.connect(lambda: self.events.put(("show", None)))
+        show_action.triggered.connect(
+            lambda: self.events.put(("settings", None))
+        )
         exit_action = QAction("Выход", menu)
         exit_action.triggered.connect(lambda: self.events.put(("exit", None)))
         menu.addAction(toggle_action)
@@ -825,7 +1140,7 @@ class VoiceInputApp:
         self._set_status("Подготовка Whisper…", MUTED)
         self.record_button.setText("Загрузка модели")
         self.record_button.setEnabled(False)
-        self._style_primary_button(self.record_button, ACCENT)
+        self._style_primary_button(self.record_button, ACID)
         self.progress.show()
 
         def worker() -> None:
@@ -862,7 +1177,10 @@ class VoiceInputApp:
 
     def _set_status(self, text: str, color: str = MUTED) -> None:
         self.status_label.setText(text)
-        self.status_label.setStyleSheet(f"color: {color}; font-weight: 500;")
+        display_color = "#D8D8D2" if color in {MUTED, ACCENT} else color
+        self.status_label.setStyleSheet(
+            f"color: {display_color}; font-weight: 600;"
+        )
 
     def toggle_recording(self) -> None:
         if self.state == "ready":
@@ -891,6 +1209,7 @@ class VoiceInputApp:
         self._preview_stop = threading.Event()
         self._recording_started_at = time.monotonic()
         self._latest_preview_text = ""
+        self._recording_warning = ""
         self.state = "recording"
         mode_name = self._mode_short_name(self._active_output_mode)
         self._set_status(
@@ -933,6 +1252,11 @@ class VoiceInputApp:
             self._handle_error(f"Ошибка завершения записи: {exc}")
             return
 
+        if clip.status_messages:
+            self._recording_warning = (
+                "Во время записи микрофон сообщил о пропуске аудиоданных."
+            )
+
         if self.config.sound_feedback:
             play_feedback("stop")
         if clip.duration_seconds < 0.35 or clip.rms < 0.0015:
@@ -940,7 +1264,7 @@ class VoiceInputApp:
             self.overlay.hide()
             self._set_status("Речь не обнаружена — попробуйте ещё раз", MUTED)
             self.record_button.setText("Начать запись")
-            self._style_primary_button(self.record_button, ACCENT)
+            self._style_primary_button(self.record_button, ACID)
             self.mode_combo.setEnabled(True)
             self._update_mode_description()
             self._set_tray_color(ACCENT)
@@ -952,7 +1276,7 @@ class VoiceInputApp:
         self._set_status("Перерабатываю всю записанную фразу…", ACCENT)
         self.record_button.setText("Распознавание…")
         self.record_button.setEnabled(False)
-        self._style_primary_button(self.record_button, ACCENT)
+        self._style_primary_button(self.record_button, ACID)
         self.overlay_audio_state.setText("Запись завершена · обрабатываю результат")
         self._show_overlay(
             "Финальная расшифровка началась…",
@@ -974,11 +1298,14 @@ class VoiceInputApp:
         stop_event: threading.Event,
     ) -> None:
         committed_samples = 0
-        preview_text = ""
-        minimum_new_samples = round(1.15 * 16_000)
-        overlap_samples = round(0.28 * 16_000)
-        maximum_window_samples = round(5.5 * 16_000)
-        if stop_event.wait(0.55):
+        stable_text = ""
+        last_preview_total = 0
+        minimum_first_samples = round(2.8 * 16_000)
+        minimum_new_samples = round(1.6 * 16_000)
+        overlap_samples = round(1.2 * 16_000)
+        maximum_window_samples = round(12.0 * 16_000)
+        stability_margin_seconds = 0.85
+        if stop_event.wait(0.45):
             return
         while not stop_event.is_set():
             if not self._preview_ready:
@@ -986,24 +1313,30 @@ class VoiceInputApp:
                     return
                 continue
 
-            clip = self.recorder.snapshot()
-            sample_count = clip.samples.size
-            if sample_count - committed_samples >= minimum_new_samples:
+            total_samples = self.recorder.sample_count
+            enough_audio = total_samples >= minimum_first_samples
+            enough_new_audio = (
+                total_samples - last_preview_total >= minimum_new_samples
+            )
+            if enough_audio and enough_new_audio:
+                start_sample = max(0, committed_samples - overlap_samples)
+                start_sample = max(
+                    start_sample,
+                    total_samples - maximum_window_samples,
+                )
+                clip = self.recorder.snapshot(start_sample=start_sample)
                 if clip.rms < 0.0012:
-                    committed_samples = sample_count
+                    committed_samples = total_samples
+                    last_preview_total = total_samples
                     if stop_event.wait(0.2):
                         return
                     continue
-                start = max(0, committed_samples - overlap_samples)
-                start = max(start, sample_count - maximum_window_samples)
-                preview_samples = clip.samples[start:sample_count]
                 try:
-                    text = self.preview_engine.transcribe(
-                        preview_samples,
+                    segments = self.preview_engine.transcribe_segments(
+                        clip.samples,
                         language=self.config.language,
                         beam_size=1,
                         custom_terms=self.config.custom_terms,
-                        punctuation_commands=self.config.punctuation_commands,
                         preview=True,
                     )
                 except Exception as exc:
@@ -1011,10 +1344,41 @@ class VoiceInputApp:
                     return
                 if stop_event.is_set():
                     return
-                if text:
-                    preview_text = merge_incremental_transcript(preview_text, text)
-                    self.events.put(("preview", (session, preview_text)))
-                committed_samples = sample_count
+                current_text = normalize_transcript(
+                    " ".join(segment.text for segment in segments),
+                    punctuation_commands=self.config.punctuation_commands,
+                )
+                if current_text:
+                    visible_text = merge_incremental_transcript(
+                        stable_text,
+                        current_text,
+                    )
+                    self.events.put(("preview", (session, visible_text)))
+
+                stable_cutoff = max(
+                    0.0,
+                    clip.duration_seconds - stability_margin_seconds,
+                )
+                stable_segments = [
+                    segment
+                    for segment in segments
+                    if segment.end <= stable_cutoff
+                ]
+                if stable_segments:
+                    stable_part = normalize_transcript(
+                        " ".join(segment.text for segment in stable_segments),
+                        punctuation_commands=self.config.punctuation_commands,
+                    )
+                    stable_text = merge_incremental_transcript(
+                        stable_text,
+                        stable_part,
+                    )
+                    committed_samples = min(
+                        total_samples,
+                        clip.start_sample
+                        + round(stable_segments[-1].end * 16_000),
+                    )
+                last_preview_total = total_samples
             if stop_event.wait(0.3):
                 return
 
@@ -1073,7 +1437,7 @@ class VoiceInputApp:
         self.state = "ready"
         self.record_button.setText("Начать запись")
         self.record_button.setEnabled(True)
-        self._style_primary_button(self.record_button, ACCENT)
+        self._style_primary_button(self.record_button, ACID)
         self.mode_combo.setEnabled(True)
         self._update_mode_description()
         self._set_tray_color(ACCENT)
@@ -1105,6 +1469,8 @@ class VoiceInputApp:
                 if processed.note
                 else insertion_status
             )
+            if self._recording_warning:
+                status = f"{status}. {self._recording_warning}"
             self._set_status(status, SUCCESS)
 
     def _handle_error(self, text: str) -> None:
@@ -1121,7 +1487,7 @@ class VoiceInputApp:
         self._update_mode_description()
         self._style_primary_button(
             self.record_button,
-            ACCENT if self.state == "ready" else RECORD,
+            ACID if self.state == "ready" else RECORD,
         )
         self._set_status(text, RECORD)
         self._set_tray_color(RECORD)
@@ -1226,6 +1592,8 @@ class VoiceInputApp:
         self._update_in_progress = True
         self.update_button.setEnabled(False)
         self.update_button.setText("Проверка…")
+        self.update_status.setText("Проверяю новую версию…")
+        self.update_progress.hide()
 
         def worker() -> None:
             try:
@@ -1247,6 +1615,9 @@ class VoiceInputApp:
         self.update_button.setText("Проверить обновления")
 
         if update is None:
+            self.update_status.setText(
+                f"Установлена актуальная версия {__version__}."
+            )
             if manual:
                 QMessageBox.information(
                     self.window,
@@ -1267,6 +1638,9 @@ class VoiceInputApp:
             f"{details}\n\nСкачать и установить?",
         )
         if answer != QMessageBox.StandardButton.Yes:
+            self.update_status.setText(
+                f"Версия {update.version} доступна — можно установить позже."
+            )
             return
         self._download_update(update)
 
@@ -1274,6 +1648,11 @@ class VoiceInputApp:
         self._update_in_progress = True
         self.update_button.setEnabled(False)
         self.update_button.setText("Загрузка 0%")
+        self.update_status.setText(
+            f"Скачиваю «Речку» {update.version} и проверяю файл…"
+        )
+        self.update_progress.setValue(0)
+        self.update_progress.show()
 
         def progress(downloaded: int, total: int) -> None:
             percent = min(100, round(downloaded * 100 / max(total, 1)))
@@ -1295,11 +1674,11 @@ class VoiceInputApp:
         self.update_button.setText("Проверить обновления")
 
     def _install_downloaded_update(self, path: Path) -> None:
-        self._reset_update_button()
-        QMessageBox.information(
-            self.window,
-            "Обновление готово",
-            "Установщик проверен. Программа сейчас закроется и обновится.",
+        self.update_button.setEnabled(False)
+        self.update_button.setText("Установка…")
+        self.update_progress.setValue(100)
+        self.update_status.setText(
+            "Файл проверен. Закрываю приложение и устанавливаю обновление…"
         )
         try:
             launch_update_installer(path)
@@ -1309,13 +1688,28 @@ class VoiceInputApp:
                 "Обновление",
                 f"Не удалось запустить установщик:\n{exc}",
             )
+            self._reset_update_button()
+            self.update_status.setText("Автоматическая установка не запустилась.")
             return
-        QTimer.singleShot(250, self.exit_app)
+        QTimer.singleShot(80, self.exit_app)
+
+    def _copy_last_result(self) -> None:
+        text = self.last_text.toPlainText().strip()
+        if text and text != "Здесь появится распознанный текст.":
+            self.application.clipboard().setText(text)
+            self._set_status("Последний результат скопирован", SUCCESS)
+
+    def _clear_last_result(self) -> None:
+        self.last_text.setPlainText("Здесь появится распознанный текст.")
 
     def show_window(self) -> None:
         self.window.showNormal()
         self.window.raise_()
         self.window.activateWindow()
+
+    def show_settings(self) -> None:
+        self.tabs.setCurrentIndex(1)
+        self.show_window()
 
     def hide_window(self) -> None:
         self.window.hide()
@@ -1338,6 +1732,11 @@ class VoiceInputApp:
     def _process_events(self) -> None:
         if self._closing:
             return
+        if (
+            self._show_settings_event
+            and consume_show_settings_event(self._show_settings_event)
+        ):
+            self.show_settings()
         if self.state == "recording":
             level = self.recorder.current_level
             self.voice_level.set_level(level)
@@ -1374,6 +1773,8 @@ class VoiceInputApp:
                 self.toggle_recording()
             elif event == "show":
                 self.show_window()
+            elif event == "settings":
+                self.show_settings()
             elif event == "exit":
                 self.exit_app()
                 return
@@ -1387,7 +1788,7 @@ class VoiceInputApp:
                     self.progress.hide()
                     self.record_button.setText("Начать запись")
                     self.record_button.setEnabled(True)
-                    self._style_primary_button(self.record_button, ACCENT)
+                    self._style_primary_button(self.record_button, ACID)
                     self._set_status("Готово к диктовке", SUCCESS)
                     self._set_tray_color(ACCENT)
                     self._load_preview_model()
@@ -1402,12 +1803,12 @@ class VoiceInputApp:
                 session, text = payload
                 if session == self._recording_session and self.state == "recording":
                     self._latest_preview_text = text
-                    self.overlay_preview.setText(text)
+                    self._set_overlay_preview(text)
                     self._position_overlay()
             elif event == "preview_error":
                 session, _text = payload
                 if session == self._recording_session and self.state == "recording":
-                    self.overlay_preview.setText(
+                    self._set_overlay_preview(
                         "Запись продолжается. Живой черновик временно недоступен, "
                         "финальная расшифровка всё равно будет выполнена."
                     )
@@ -1432,12 +1833,16 @@ class VoiceInputApp:
             elif event == "update_error":
                 manual, text = payload
                 self._reset_update_button()
+                self.update_status.setText("Не удалось проверить обновления.")
                 if manual:
                     QMessageBox.warning(self.window, "Обновления", text)
             elif event == "update_progress":
                 self.update_button.setText(f"Загрузка {payload}%")
+                self.update_progress.setValue(payload)
             elif event == "update_download_error":
                 self._reset_update_button()
+                self.update_progress.hide()
+                self.update_status.setText("Не удалось скачать обновление.")
                 QMessageBox.warning(
                     self.window,
                     "Обновление",

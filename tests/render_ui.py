@@ -31,7 +31,11 @@ def main() -> int:
 
     def capture() -> None:
         application.processEvents()
-        target = controller.overlay if selected_tab == "overlay" else controller.window
+        target = (
+            controller.overlay
+            if selected_tab in {"overlay", "overlay-long"}
+            else controller.window
+        )
         if not target.grab().save(str(output)):
             print(f"Не удалось сохранить {output}", file=sys.stderr)
             controller.exit_app()
@@ -54,16 +58,29 @@ def main() -> int:
                     "Промпт для AI — структурированная задача"
                 )
                 controller.target_combo.setCurrentText("ChatGPT")
-            if selected_tab == "overlay":
+            if selected_tab in {"overlay", "overlay-long"}:
                 controller.window.hide()
                 controller.voice_level.reset()
                 for level in (0.1, 0.25, 0.55, 0.9, 0.45, 0.7, 0.2):
                     controller.voice_level.set_level(level)
+                preview = (
+                    "Мне нужно сделать живой текст, который обновляется целиком "
+                    "и после остановки превращается в точную формулировку."
+                )
+                if selected_tab == "overlay-long":
+                    preview = (
+                        "Первая мысль уже распознана и постепенно уходит вверх. "
+                        "Затем появляется вторая часть длинного сообщения. "
+                        "После неё пользователь продолжает говорить без остановки. "
+                        "Предыдущие строки сохраняются в черновике, но не занимают "
+                        "весь экран. Дальше идёт ещё один подробный фрагмент, "
+                        "который проверяет автоматическую прокрутку. Старые строки "
+                        "должны скрыться сверху. Сейчас видна самая новая фраза внизу."
+                    )
                 controller._show_overlay(
                     "Общение · идёт запись",
                     "#EF476F",
-                    "Мне нужно сделать живой текст, который обновляется целиком "
-                    "и после остановки превращается в точную формулировку.",
+                    preview,
                 )
             else:
                 controller.window.show()

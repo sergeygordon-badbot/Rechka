@@ -24,6 +24,33 @@ $workPath = Join-Path $PSScriptRoot "build\VoiceInput-$version-work"
 $distPath = Join-Path $PSScriptRoot "dist\VoiceInput-$version"
 $iconPath = Join-Path $PSScriptRoot "assets\voiceinput.ico"
 
+function Remove-PreviousBuildDirectory {
+    param([Parameter(Mandatory = $true)][string]$LiteralPath)
+
+    if (-not (Test-Path -LiteralPath $LiteralPath)) {
+        return
+    }
+
+    $workspace = (Resolve-Path -LiteralPath $PSScriptRoot).Path
+    $resolved = (Resolve-Path -LiteralPath $LiteralPath).Path
+    $workspacePrefix = $workspace + [IO.Path]::DirectorySeparatorChar
+    if (-not $resolved.StartsWith(
+        $workspacePrefix,
+        [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw "Refusing to remove a build directory outside the workspace: $resolved"
+    }
+
+    Get-ChildItem -LiteralPath $resolved -Recurse -Force |
+        ForEach-Object { $_.Attributes = [IO.FileAttributes]::Normal }
+    (Get-Item -LiteralPath $resolved -Force).Attributes =
+        [IO.FileAttributes]::Directory
+    Remove-Item -LiteralPath $resolved -Recurse -Force
+}
+
+Remove-PreviousBuildDirectory -LiteralPath $workPath
+Remove-PreviousBuildDirectory -LiteralPath $distPath
+
 & $python -m PyInstaller `
     --noconfirm `
     --windowed `

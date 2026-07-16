@@ -6,10 +6,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
-from voice_input.audio import prepare_audio_for_whisper, resample_audio
+from voice_input.audio import AudioRecorder, prepare_audio_for_whisper, resample_audio
 from voice_input.config import (
     AI_TARGET_OPTIONS,
     DECODING_BEAM_SIZES,
@@ -20,6 +21,7 @@ from voice_input.config import (
     save_config,
 )
 from voice_input.engine import (
+    WhisperEngine,
     choose_chunk_length,
     merge_incremental_transcript,
     normalize_transcript,
@@ -28,10 +30,19 @@ from voice_input.hotkeys import hotkey_label, parse_hotkey
 from voice_input.prompting import build_prompt_fallback, polish_communication_text
 from voice_input.updater import (
     UpdateError,
+    launch_update_installer,
     parse_version,
     update_from_release_payload,
 )
-from voice_input.windows import INPUT, _feedback_wave, physical_core_count
+from voice_input.windows import (
+    INPUT,
+    _feedback_wave,
+    close_handle,
+    consume_show_settings_event,
+    create_show_settings_event,
+    physical_core_count,
+    signal_show_settings_event,
+)
 
 
 class AudioTests(unittest.TestCase):
@@ -48,6 +59,23 @@ class AudioTests(unittest.TestCase):
         result_rms = float(np.sqrt(np.mean(np.square(result), dtype=np.float64)))
         self.assertGreaterEqual(result_rms, 0.039)
         self.assertLessEqual(float(np.max(np.abs(result))), 0.98)
+
+    def test_preview_snapshot_copies_only_requested_tail(self) -> None:
+        recorder = AudioRecorder()
+        with recorder._lock:
+            recorder._sample_rate = 16_000
+            recorder._chunks = [
+                np.arange(0, 16_000, dtype=np.float32),
+                np.arange(16_000, 32_000, dtype=np.float32),
+            ]
+            recorder._total_frames = 32_000
+
+        clip = recorder.snapshot(start_sample=24_000)
+
+        self.assertEqual(clip.start_sample, 24_000)
+        self.assertEqual(clip.total_samples, 32_000)
+        self.assertEqual(clip.samples.size, 8_000)
+        self.assertEqual(float(clip.samples[0]), 24_000.0)
 
 
 class TextTests(unittest.TestCase):
@@ -69,6 +97,39 @@ class TextTests(unittest.TestCase):
             merge_incremental_transcript(previous, current),
             "Мне нужно быстро сформулировать мысль и вставить текст",
         )
+
+    def test_final_transcription_keeps_segments_after_thirty_seconds(self) -> None:
+        class Segment:
+            def __init__(self, start: float, end: float, text: str) -> None:
+                self.start = start
+                self.end = end
+                self.text = text
+
+        class FakeModel:
+            def __init__(self) -> None:
+                self.options: dict[str, object] = {}
+
+            def transcribe(self, _samples: object, **options: object) -> object:
+                self.options = options
+                segments = [
+                    Segment(0.0, 28.0, "первая часть"),
+                    Segment(31.0, 52.0, "вторая часть"),
+                ]
+                if options.get("without_timestamps"):
+                    segments = segments[:1]
+                return iter(segments), object()
+
+        engine = WhisperEngine(cpu_threads=1)
+        fake_model = FakeModel()
+        engine._model = fake_model
+
+        result = engine.transcribe(
+            np.zeros(55 * 16_000, dtype=np.float32),
+            language="ru",
+        )
+
+        self.assertEqual(result, "Первая часть вторая часть")
+        self.assertFalse(fake_model.options["without_timestamps"])
 
     def test_communication_cleanup_is_conservative(self) -> None:
         text = polish_communication_text("Эм, я я хочу оставить этот смысл.")
@@ -193,6 +254,35 @@ class UpdaterTests(unittest.TestCase):
         with self.assertRaises(UpdateError):
             update_from_release_payload(payload, "0.3.1")
 
+    def test_update_installer_runs_silently_and_closes_the_app(self) -> None:
+        previous = os.environ.get("VOICE_INPUT_DATA_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                os.environ["VOICE_INPUT_DATA_DIR"] = directory
+                installer = (
+                    Path(directory)
+                    / "updates"
+                    / "VoiceInput-Setup-9.9.9.exe"
+                )
+                installer.parent.mkdir(parents=True)
+                installer.write_bytes(b"test installer")
+
+                with patch("voice_input.updater.subprocess.Popen") as popen:
+                    launch_update_installer(installer)
+
+                arguments = popen.call_args.args[0]
+                self.assertEqual(arguments[0], str(installer.resolve()))
+                self.assertIn("/VERYSILENT", arguments)
+                self.assertIn("/SUPPRESSMSGBOXES", arguments)
+                self.assertIn("/CLOSEAPPLICATIONS", arguments)
+                self.assertIn("/FORCECLOSEAPPLICATIONS", arguments)
+                self.assertIn("/UPDATE=1", arguments)
+        finally:
+            if previous is None:
+                os.environ.pop("VOICE_INPUT_DATA_DIR", None)
+            else:
+                os.environ["VOICE_INPUT_DATA_DIR"] = previous
+
 
 class WindowsInteropTests(unittest.TestCase):
     def test_custom_hotkey_parser(self) -> None:
@@ -212,6 +302,15 @@ class WindowsInteropTests(unittest.TestCase):
 
     def test_soft_feedback_is_a_wave_file(self) -> None:
         self.assertTrue(_feedback_wave("start").startswith(b"RIFF"))
+
+    def test_second_launch_can_request_settings_window(self) -> None:
+        handle = create_show_settings_event()
+        try:
+            self.assertTrue(signal_show_settings_event())
+            self.assertTrue(consume_show_settings_event(handle))
+            self.assertFalse(consume_show_settings_event(handle))
+        finally:
+            close_handle(handle)
 
 
 if __name__ == "__main__":

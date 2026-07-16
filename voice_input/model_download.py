@@ -10,6 +10,8 @@ os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 import httpx
 from huggingface_hub import get_hf_file_metadata, hf_hub_url
 
+from . import __version__
+
 
 StatusCallback = Callable[[str], None]
 CHUNK_SIZE = 4 * 1024 * 1024
@@ -59,7 +61,7 @@ def _download_file(
 
         metadata = get_hf_file_metadata(metadata_url)
         expected_size = int(metadata.size or expected_size)
-        headers = {"User-Agent": "Rechka/0.3.3"}
+        headers = {"User-Agent": f"Rechka/{__version__}"}
         if downloaded:
             headers["Range"] = f"bytes={downloaded}-"
 

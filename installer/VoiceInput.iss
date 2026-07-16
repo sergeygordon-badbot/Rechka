@@ -1,7 +1,7 @@
 #define MyAppName "Речка"
 #define MyAppExeName "Rechka.exe"
 #ifndef MyAppVersion
-#define MyAppVersion "0.3.3"
+#define MyAppVersion "0.3.4"
 #endif
 #define MyAppPublisher "EBSF"
 
@@ -18,6 +18,8 @@ DefaultDirName={localappdata}\Programs\VoiceInput
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 DisableWelcomePage=no
+DisableReadyPage=yes
+DisableDirPage=auto
 PrivilegesRequired=lowest
 SetupArchitecture=x64
 ArchitecturesAllowed=x64compatible
@@ -27,12 +29,16 @@ OutputDir=..\dist\installer
 OutputBaseFilename=VoiceInput-Setup-{#MyAppVersion}
 Compression=lzma2/fast
 SolidCompression=yes
-WizardStyle=modern
+WizardStyle=modern light zircon includetitlebar
+WizardSizePercent=110,110
+WizardImageFile=..\assets\installer-wizard.png
+WizardSmallImageFile=..\assets\installer-small.png
+WizardImageBackColor=$00EBF1F3
+WizardSmallImageBackColor=$00EBF1F3
 SetupLogging=yes
-CloseApplications=yes
+CloseApplications=force
 CloseApplicationsFilter=VoiceInput.exe,Rechka.exe
 RestartApplications=no
-AppMutex=Local\VoiceInputDesktopApp
 UninstallDisplayName={#MyAppName}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 VersionInfoVersion={#MyAppVersion}.0
@@ -67,4 +73,29 @@ Type: filesandordirs; Name: "{app}\models\faster-whisper-small"
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "VoiceInput"; Flags: uninsdeletevalue dontcreatekey
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; WorkingDir: "{app}"; Flags: nowait
+Filename: "{app}\{#MyAppExeName}"; Parameters: "{code:GetLaunchParameters}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; WorkingDir: "{app}"; Flags: nowait
+
+[Code]
+function IsUpdateInstall: Boolean;
+begin
+  Result := CompareText(ExpandConstant('{param:UPDATE|0}'), '1') = 0;
+end;
+
+function GetLaunchParameters(Param: String): String;
+begin
+  if IsUpdateInstall then
+    Result := '--minimized'
+  else
+    Result := '';
+end;
+
+procedure InitializeWizard;
+begin
+  WizardForm.WelcomeLabel1.Caption := 'Речка';
+  WizardForm.WelcomeLabel2.Caption :=
+    'Локальный голосовой ввод для Windows 11.' + #13#10 + #13#10 +
+    'Говорите свободно — получите готовый текст в любом приложении.';
+  WizardForm.FinishedHeadingLabel.Caption := 'Речка готова';
+  WizardForm.FinishedLabel.Caption :=
+    'Программа установлена и будет запущена после закрытия мастера.';
+end;
