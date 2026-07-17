@@ -36,6 +36,7 @@ from voice_input.config import (
     DECODING_BEAM_SIZES,
     MODEL_OPTIONS,
     OUTPUT_MODE_OPTIONS,
+    RECOGNITION_MODE_OPTIONS,
     AppConfig,
     load_config,
     save_config,
@@ -909,7 +910,7 @@ class ConfigTests(unittest.TestCase):
                 self.assertEqual(actual.decoding_mode, "balanced")
                 self.assertEqual(actual.hotkey, "Ctrl+Space")
                 self.assertFalse(actual.use_local_ai)
-                self.assertEqual(actual.settings_revision, 6)
+                self.assertEqual(actual.settings_revision, 7)
                 self.assertTrue(actual.onboarding_complete)
         finally:
             if previous is None:
@@ -962,6 +963,55 @@ class ConfigTests(unittest.TestCase):
 
                 self.assertEqual(actual.decoding_mode, "fast")
                 self.assertEqual(actual.beam_size, 1)
+        finally:
+            if previous is None:
+                os.environ.pop("VOICE_INPUT_DATA_DIR", None)
+            else:
+                os.environ["VOICE_INPUT_DATA_DIR"] = previous
+
+    def test_recognition_mode_and_local_profile_are_preserved(self) -> None:
+        previous = os.environ.get("VOICE_INPUT_DATA_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                os.environ["VOICE_INPUT_DATA_DIR"] = directory
+                save_config(
+                    AppConfig(
+                        recognition_mode="local",
+                        model="tiny",
+                        decoding_mode="fast",
+                    )
+                )
+
+                actual = load_config()
+
+                self.assertEqual(actual.recognition_mode, "local")
+                self.assertEqual(actual.model, "tiny")
+                self.assertEqual(actual.decoding_mode, "fast")
+                self.assertIn("cloud", RECOGNITION_MODE_OPTIONS)
+        finally:
+            if previous is None:
+                os.environ.pop("VOICE_INPUT_DATA_DIR", None)
+            else:
+                os.environ["VOICE_INPUT_DATA_DIR"] = previous
+
+    def test_invalid_recognition_mode_falls_back_to_auto(self) -> None:
+        previous = os.environ.get("VOICE_INPUT_DATA_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                os.environ["VOICE_INPUT_DATA_DIR"] = directory
+                (Path(directory) / "settings.json").write_text(
+                    json.dumps(
+                        {
+                            "recognition_mode": "unknown",
+                            "settings_revision": 7,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+                actual = load_config()
+
+                self.assertEqual(actual.recognition_mode, "auto")
         finally:
             if previous is None:
                 os.environ.pop("VOICE_INPUT_DATA_DIR", None)

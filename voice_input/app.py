@@ -65,6 +65,7 @@ from .config import (
     LANGUAGE_OPTIONS,
     MODEL_OPTIONS,
     OUTPUT_MODE_OPTIONS,
+    RECOGNITION_MODE_OPTIONS,
     AppConfig,
     load_config,
     save_config,
@@ -278,8 +279,12 @@ class VoiceInputApp:
         self.recorder = AudioRecorder()
         self.engine = WhisperEngine()
         self.computer = assess_computer(self.engine.inference_profile)
-        self.config.model = self.computer.recommended_model
-        if self.engine.inference_profile.device == "cpu":
+        if self.config.recognition_mode != "local":
+            self.config.model = self.computer.recommended_model
+        if (
+            self.config.recognition_mode != "local"
+            and self.engine.inference_profile.device == "cpu"
+        ):
             self.config.decoding_mode = "fast"
             self.config.beam_size = DECODING_BEAM_SIZES["fast"]
         try:
@@ -292,6 +297,7 @@ class VoiceInputApp:
         self.state = "loading"
         self._closing = False
         self._model_generation = 0
+        self._recognition_generation = 0
         self._recording_session = 0
         self._preview_stop: threading.Event | None = None
         self._latest_preview_text = ""
@@ -599,18 +605,6 @@ class VoiceInputApp:
         layout.setContentsMargins(20, 18, 13, 20)
         layout.setSpacing(12)
 
-        heading = QLabel("Голос в текст")
-        heading.setStyleSheet(
-            f"color: {TEXT}; font-size: 18pt; font-weight: 750; "
-            "letter-spacing: -0.5px;"
-        )
-        layout.addWidget(heading)
-        subtitle = QLabel(
-            "Выберите режим, нажмите горячую клавишу и говорите свободно."
-        )
-        subtitle.setStyleSheet(f"color: {MUTED}; font-size: 9pt;")
-        layout.addWidget(subtitle)
-
         mode_card = QFrame()
         mode_card.setStyleSheet(
             f"QFrame {{ background: {CARD}; border: 1px solid {BORDER}; "
@@ -621,8 +615,14 @@ class VoiceInputApp:
         mode_layout.setContentsMargins(16, 14, 16, 14)
         mode_layout.setSpacing(9)
 
+        mode_title = QLabel("Выберите режим")
+        mode_title.setStyleSheet(
+            f"color: {TEXT}; font-size: 10pt; font-weight: 700;"
+        )
+        mode_layout.addWidget(mode_title)
+
         mode_row = QHBoxLayout()
-        mode_label = QLabel("Режим")
+        mode_label = QLabel("Формат текста")
         mode_label.setStyleSheet(f"color: {TEXT}; font-weight: 650;")
         mode_label.setFixedWidth(110)
         self.mode_combo = ScrollSafeComboBox()
@@ -715,6 +715,17 @@ class VoiceInputApp:
         runtime_layout.addWidget(self.runtime_summary_label)
         layout.addWidget(runtime_card)
 
+        workspace_card = QFrame()
+        self.workspace_card = workspace_card
+        workspace_card.setStyleSheet(
+            f"QFrame#dictationWorkspace {{ background: {CARD}; "
+            f"border: 1px solid {BORDER}; border-radius: 14px; }}"
+        )
+        workspace_card.setObjectName("dictationWorkspace")
+        workspace_layout = QVBoxLayout(workspace_card)
+        workspace_layout.setContentsMargins(12, 12, 12, 12)
+        workspace_layout.setSpacing(10)
+
         record_card = QFrame()
         self.record_card = record_card
         record_card.setStyleSheet(
@@ -781,17 +792,16 @@ class VoiceInputApp:
         self.hotkey_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.hotkey_hint.setStyleSheet("color: #A8AAA3; font-size: 8.5pt;")
         record_layout.addWidget(self.hotkey_hint)
-        layout.addWidget(record_card)
+        workspace_layout.addWidget(record_card)
 
         result_card = QFrame()
         self.result_card = result_card
         result_card.setStyleSheet(
-            f"QFrame {{ background: {CARD}; border: 1px solid {BORDER}; "
-            "border-radius: 14px; }}"
+            "QFrame { background: transparent; border: 0; }"
             "QLabel { border: 0; background: transparent; }"
         )
         result_layout = QVBoxLayout(result_card)
-        result_layout.setContentsMargins(16, 13, 16, 15)
+        result_layout.setContentsMargins(4, 2, 4, 2)
         result_layout.setSpacing(9)
         result_header = QHBoxLayout()
         last_label = QLabel("Последний результат")
@@ -840,40 +850,31 @@ class VoiceInputApp:
         self.result_tabs.currentChanged.connect(self._on_result_tab_changed)
         result_layout.addWidget(self.result_tabs)
 
-        result_actions = QVBoxLayout()
-        result_actions.setSpacing(7)
-        recording_actions = QHBoxLayout()
-        self.repeat_button = QPushButton("Повторить")
+        # Старые действия сохранены только как внутренние совместимые команды:
+        # новая запись всегда доступна большой кнопкой, а результат уже вставлен
+        # автоматически. На основном экране эти элементы больше не отвлекают.
+        self.repeat_button = QPushButton("Повторить", result_card)
         self.repeat_button.setToolTip("Начать новую запись в том же режиме")
-        self.undo_button = QPushButton("Отменить вставку")
+        self.undo_button = QPushButton("Отменить вставку", result_card)
         self.undo_button.setToolTip("Отменить последнюю вставку в исходном окне")
         self.undo_button.setEnabled(False)
         for button in (self.repeat_button, self.undo_button):
-            self._style_secondary_button(button)
-            recording_actions.addWidget(button)
-        recording_actions.addStretch()
-        result_actions.addLayout(recording_actions)
+            button.hide()
         self.repeat_button.clicked.connect(self._repeat_recording)
         self.undo_button.clicked.connect(self._undo_last_insertion)
-        quick_actions = QHBoxLayout()
-        self.quick_action_combo = ScrollSafeComboBox()
+
+        self.quick_action_combo = ScrollSafeComboBox(result_card)
         self.quick_action_combo.addItems(list(QUICK_ACTION_OPTIONS.values()))
-        self.quick_action_combo.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Fixed,
-        )
-        self.quick_action_button = QPushButton("Применить")
+        self.quick_action_combo.hide()
+        self.quick_action_button = QPushButton("Применить", result_card)
         self.quick_action_button.setToolTip(
             "Преобразовать только показанный результат"
         )
-        self._style_secondary_button(self.quick_action_button)
         self.quick_action_button.clicked.connect(self._apply_quick_action)
-        quick_actions.addWidget(self.quick_action_combo, 1)
-        quick_actions.addWidget(self.quick_action_button)
-        result_actions.addLayout(quick_actions)
-        result_layout.addLayout(result_actions)
+        self.quick_action_button.hide()
         self._set_result_available(False)
-        layout.addWidget(result_card)
+        workspace_layout.addWidget(result_card)
+        layout.addWidget(workspace_card)
         layout.addStretch()
         scroll.setWidget(content)
         QTimer.singleShot(0, self._resize_result_editor)
@@ -900,21 +901,8 @@ class VoiceInputApp:
         outer.setContentsMargins(20, 18, 13, 20)
         outer.setSpacing(12)
 
-        heading = QLabel("Настройки")
-        heading.setStyleSheet(
-            f"color: {TEXT}; font-size: 18pt; font-weight: 750; "
-            "letter-spacing: -0.5px;"
-        )
-        outer.addWidget(heading)
-        subtitle = QLabel(
-            "Горячая клавиша, микрофон, скорость и обработка текста."
-        )
-        subtitle.setWordWrap(True)
-        subtitle.setStyleSheet(f"color: {MUTED}; font-size: 9pt;")
-        outer.addWidget(subtitle)
-
         self.onboarding_hint = QLabel(
-            "Первый запуск: выберите микрофон, нажмите «Тест микрофона», "
+            "Первый запуск: выберите микрофон, нажмите «Проверить микрофон», "
             "затем сохраните настройки. После этого можно диктовать из любого окна."
         )
         self.onboarding_hint.setWordWrap(True)
@@ -1003,20 +991,31 @@ class VoiceInputApp:
 
         recognition, recognition_layout = make_section("Распознавание")
         recognition_form = make_form()
-        self.model_combo = make_settings_combo(list(MODEL_OPTIONS.values()))
-        self.model_combo.setEnabled(False)
-        self.model_combo.setToolTip(
-            "Локальная резервная модель выбирается автоматически "
-            "по характеристикам компьютера."
+        self.recognition_mode_combo = make_settings_combo(
+            list(RECOGNITION_MODE_OPTIONS.values())
         )
-        recognition_form.addRow("Локальный резерв", self.model_combo)
+        self.recognition_mode_combo.setToolTip(
+            "Авто подбирает способ распознавания по компьютеру и доступности "
+            "бесплатных онлайн-служб."
+        )
+        self.recognition_mode_combo.currentIndexChanged.connect(
+            self._update_recognition_controls
+        )
+        recognition_form.addRow("Где распознавать", self.recognition_mode_combo)
+
+        self.model_combo = make_settings_combo(list(MODEL_OPTIONS.values()))
+        self.model_combo.setToolTip(
+            "Доступно в локальном режиме. Tiny легче всего, Base обычно "
+            "даёт лучший баланс на процессоре."
+        )
+        recognition_form.addRow("Локальная модель", self.model_combo)
 
         self.decoding_combo = make_settings_combo(
             list(DECODING_OPTIONS.values())
         )
-        self.decoding_combo.setEnabled(False)
         self.decoding_combo.setToolTip(
-            "Скорость локального декодирования выбрана автоматически."
+            "Доступно в локальном режиме. «Быстро» сильнее всего сокращает "
+            "задержку на слабом компьютере."
         )
         recognition_form.addRow("Скорость", self.decoding_combo)
 
@@ -1029,34 +1028,38 @@ class VoiceInputApp:
         )
         recognition_form.addRow("Микрофон", self.device_combo)
 
-        self.custom_terms_edit = QLineEdit()
-        self.custom_terms_edit.setPlaceholderText(
-            "Например: Codex, PostgreSQL, название компании"
-        )
-        self.custom_terms_edit.setToolTip(
-            "Можно указать варианты распознавания: PostgreSQL = постгрес | пост грес"
-        )
-        recognition_form.addRow("Слова и названия", self.custom_terms_edit)
         recognition_layout.addLayout(recognition_form)
+        self.recognition_status_label = QLabel()
+        self.recognition_status_label.setWordWrap(True)
+        self.recognition_status_label.setStyleSheet(
+            f"color: {MUTED}; font-size: 8pt;"
+        )
+        recognition_layout.addWidget(self.recognition_status_label)
         microphone_actions = QHBoxLayout()
-        refresh = QPushButton("Обновить")
+        refresh = QPushButton("Обновить микрофоны")
         self._style_secondary_button(refresh)
         refresh.setToolTip("Обновить список доступных микрофонов")
-        refresh.clicked.connect(self._refresh_devices)
+        refresh.clicked.connect(
+            lambda: self._refresh_devices(announce=True)
+        )
         microphone_actions.addWidget(refresh)
-        self.microphone_test_button = QPushButton("Тест микрофона")
+        self.microphone_test_button = QPushButton("Проверить микрофон")
         self._style_secondary_button(self.microphone_test_button)
         self.microphone_test_button.clicked.connect(self._test_microphone)
         microphone_actions.addWidget(self.microphone_test_button)
-        self.diagnostics_button = QPushButton("Диагностика")
+        microphone_actions.addStretch()
+        recognition_layout.addLayout(microphone_actions)
+
+        diagnostics_actions = QHBoxLayout()
+        self.diagnostics_button = QPushButton("Скопировать диагностику")
         self._style_secondary_button(self.diagnostics_button)
         self.diagnostics_button.setToolTip(
             "Копирует технический JSON без аудио, расшифровки и словаря"
         )
         self.diagnostics_button.clicked.connect(self._copy_diagnostics)
-        microphone_actions.addWidget(self.diagnostics_button)
-        microphone_actions.addStretch()
-        recognition_layout.addLayout(microphone_actions)
+        diagnostics_actions.addWidget(self.diagnostics_button)
+        diagnostics_actions.addStretch()
+        recognition_layout.addLayout(diagnostics_actions)
         self.microphone_test_status = QLabel(
             "Проверка запишет только 3 секунды и сразу удалит аудио."
         )
@@ -1067,7 +1070,60 @@ class VoiceInputApp:
         recognition_layout.addWidget(self.microphone_test_status)
         outer.addWidget(recognition)
 
-        processing, processing_layout = make_section("Обработка текста")
+        processing, processing_layout = make_section("Оформление текста")
+        processing_hint = QLabel(
+            "Эти параметры меняют только оформление уже распознанного текста."
+        )
+        processing_hint.setWordWrap(True)
+        processing_hint.setStyleSheet(f"color: {MUTED}; font-size: 8pt;")
+        processing_layout.addWidget(processing_hint)
+
+        self.commands_check = QCheckBox(
+            "Понимать «новая строка», «поставь точку»"
+        )
+        self.append_space_check = QCheckBox("Добавлять пробел после вставки")
+        self.sound_feedback_check = QCheckBox("Мягкий звук начала и остановки")
+        for check in (
+            self.commands_check,
+            self.append_space_check,
+            self.sound_feedback_check,
+        ):
+            processing_layout.addWidget(check)
+
+        self.advanced_processing_button = QPushButton(
+            "Показать дополнительную обработку"
+        )
+        self.advanced_processing_button.setCheckable(True)
+        self._style_secondary_button(self.advanced_processing_button)
+        self.advanced_processing_button.toggled.connect(
+            self._toggle_advanced_processing
+        )
+        processing_layout.addWidget(
+            self.advanced_processing_button,
+            alignment=Qt.AlignmentFlag.AlignLeft,
+        )
+
+        self.advanced_processing_frame = QFrame()
+        self.advanced_processing_frame.setObjectName("advancedProcessing")
+        self.advanced_processing_frame.setStyleSheet(
+            f"QFrame#advancedProcessing {{ background: {CARD_LIGHT}; "
+            f"border: 1px solid {BORDER}; border-radius: 10px; }}"
+            "QLabel, QCheckBox { border: 0; background: transparent; }"
+        )
+        advanced_processing_layout = QVBoxLayout(
+            self.advanced_processing_frame
+        )
+        advanced_processing_layout.setContentsMargins(12, 10, 12, 10)
+        advanced_processing_layout.setSpacing(8)
+        advanced_processing_note = QLabel(
+            "Ollama — необязательная локальная AI-программа. Она может "
+            "переписать текст по инструкции, но заметно увеличивает задержку."
+        )
+        advanced_processing_note.setWordWrap(True)
+        advanced_processing_note.setStyleSheet(
+            f"color: {MUTED}; font-size: 8pt;"
+        )
+        advanced_processing_layout.addWidget(advanced_processing_note)
         processing_form = make_form()
         self.project_context_edit = QLineEdit()
         self.project_context_edit.setPlaceholderText(
@@ -1084,62 +1140,89 @@ class VoiceInputApp:
         )
         self.custom_instruction_edit.setFixedHeight(72)
         processing_form.addRow("Инструкция своего режима", self.custom_instruction_edit)
-        processing_layout.addLayout(processing_form)
-
-        self.append_space_check = QCheckBox("Добавлять пробел после вставки")
-        self.commands_check = QCheckBox(
-            "Понимать «новая строка», «поставь точку»"
-        )
+        advanced_processing_layout.addLayout(processing_form)
         self.use_local_ai_check = QCheckBox(
             "Улучшать текст через Ollama (медленнее)"
         )
         self.use_local_ai_check.setToolTip(
             "Локальная Ollama может улучшить обработку текста, но увеличивает задержку."
         )
-        self.sound_feedback_check = QCheckBox("Мягкий звук начала и остановки")
-        for check in (
-            self.append_space_check,
-            self.commands_check,
-            self.use_local_ai_check,
-            self.sound_feedback_check,
-        ):
-            processing_layout.addWidget(check)
+        advanced_processing_layout.addWidget(self.use_local_ai_check)
+        self.advanced_processing_frame.hide()
+        processing_layout.addWidget(self.advanced_processing_frame)
         outer.addWidget(processing)
 
-        personalization, personalization_layout = make_section("Персонализация")
+        personalization, personalization_layout = make_section(
+            "Слова и быстрые фразы"
+        )
         personalization_hint = QLabel(
-            "Сниппеты срабатывают только при полном совпадении произнесённой фразы. "
-            "Профили выбираются по имени .exe активного приложения."
+            "Добавьте сложные имена для более точного распознавания. Быстрая "
+            "фраза заменяет короткую команду на готовый текст целиком."
         )
         personalization_hint.setWordWrap(True)
         personalization_hint.setStyleSheet(f"color: {MUTED}; font-size: 8pt;")
         personalization_layout.addWidget(personalization_hint)
+
+        self.custom_terms_edit = QLineEdit()
+        self.custom_terms_edit.setPlaceholderText(
+            "Например: Codex, PostgreSQL, название компании"
+        )
+        self.custom_terms_edit.setToolTip(
+            "Можно указать варианты распознавания: PostgreSQL = постгрес | пост грес"
+        )
+        personalization_layout.addWidget(QLabel("Сложные слова и названия"))
+        personalization_layout.addWidget(self.custom_terms_edit)
 
         self.snippets_edit = QTextEdit()
         self.snippets_edit.setPlaceholderText(
             "подпись => С уважением,\\nИван\nмой адрес => Москва, улица…"
         )
         self.snippets_edit.setFixedHeight(86)
-        personalization_layout.addWidget(QLabel("Сниппеты: фраза => текст"))
+        snippets_label = QLabel(
+            "Быстрые фразы: короткая команда => готовый текст"
+        )
+        snippets_label.setWordWrap(True)
+        personalization_layout.addWidget(snippets_label)
         personalization_layout.addWidget(self.snippets_edit)
+        snippet_actions = QHBoxLayout()
+        snippet_example = QPushButton("Вставить пример")
+        self._style_secondary_button(snippet_example)
+        snippet_example.clicked.connect(self._insert_snippet_example)
+        snippet_actions.addWidget(snippet_example)
+        snippet_actions.addStretch()
+        personalization_layout.addLayout(snippet_actions)
 
         self.app_profiles_edit = QTextEdit()
         self.app_profiles_edit.setPlaceholderText(
             "code.exe | verbatim | Codex, GitHub\ntelegram*.exe | communication |"
         )
         self.app_profiles_edit.setFixedHeight(86)
-        profiles_label = QLabel("Профили приложений: app.exe | режим | слова")
+        self.app_profiles_frame = QFrame()
+        self.app_profiles_frame.setObjectName("appProfiles")
+        self.app_profiles_frame.setStyleSheet(
+            f"QFrame#appProfiles {{ background: {CARD_LIGHT}; "
+            f"border: 1px solid {BORDER}; border-radius: 10px; }}"
+            "QLabel { border: 0; background: transparent; }"
+        )
+        app_profiles_layout = QVBoxLayout(self.app_profiles_frame)
+        app_profiles_layout.setContentsMargins(12, 10, 12, 10)
+        profiles_label = QLabel(
+            "Для опытных пользователей: разные режимы по имени программы "
+            "(app.exe | режим | слова)."
+        )
         profiles_label.setWordWrap(True)
-        personalization_layout.addWidget(profiles_label)
-        personalization_layout.addWidget(self.app_profiles_edit)
-
-        self.history_enabled_check = QCheckBox(
-            "Локальная история (без аудио)"
+        app_profiles_layout.addWidget(profiles_label)
+        app_profiles_layout.addWidget(self.app_profiles_edit)
+        self.app_profiles_frame.hide()
+        self.app_profiles_button = QPushButton("Показать профили программ")
+        self.app_profiles_button.setCheckable(True)
+        self._style_secondary_button(self.app_profiles_button)
+        self.app_profiles_button.toggled.connect(self._toggle_app_profiles)
+        personalization_layout.addWidget(
+            self.app_profiles_button,
+            alignment=Qt.AlignmentFlag.AlignLeft,
         )
-        self.history_enabled_check.setToolTip(
-            "Выключено по умолчанию. Хранится до 100 записей; аудио не сохраняется."
-        )
-        personalization_layout.addWidget(self.history_enabled_check)
+        personalization_layout.addWidget(self.app_profiles_frame)
         personalization_actions = QHBoxLayout()
         export_button = QPushButton("Экспорт")
         import_button = QPushButton("Импорт")
@@ -1214,11 +1297,20 @@ class VoiceInputApp:
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(20, 18, 20, 20)
         layout.setSpacing(10)
-        heading = QLabel("Локальная история")
+        heading = QLabel("История распознавания")
         heading.setStyleSheet(
             f"color: {TEXT}; font-size: 18pt; font-weight: 750;"
         )
         layout.addWidget(heading)
+        self.history_enabled_check = QCheckBox(
+            "Сохранять распознанный текст на этом компьютере"
+        )
+        self.history_enabled_check.setToolTip(
+            "Хранится до 100 записей. Аудио никогда не сохраняется."
+        )
+        self.history_enabled_check.setChecked(self.config.history_enabled)
+        self.history_enabled_check.toggled.connect(self._set_history_enabled)
+        layout.addWidget(self.history_enabled_check)
         self.history_status = QLabel()
         self.history_status.setWordWrap(True)
         self.history_status.setStyleSheet(f"color: {MUTED}; font-size: 9pt;")
@@ -1227,16 +1319,17 @@ class VoiceInputApp:
         self.history_view.setReadOnly(True)
         layout.addWidget(self.history_view, 1)
         actions = QHBoxLayout()
-        refresh = QPushButton("Обновить")
-        copy = QPushButton("Копировать всё")
-        clear = QPushButton("Удалить историю")
-        for button in (refresh, copy, clear):
+        self.copy_history_button = QPushButton("Копировать всё")
+        self.clear_history_button = QPushButton("Удалить историю")
+        for button in (
+            self.copy_history_button,
+            self.clear_history_button,
+        ):
             self._style_secondary_button(button)
             actions.addWidget(button)
         actions.addStretch()
-        refresh.clicked.connect(self._refresh_history)
-        copy.clicked.connect(self._copy_history)
-        clear.clicked.connect(self._clear_history)
+        self.copy_history_button.clicked.connect(self._copy_history)
+        self.clear_history_button.clicked.connect(self._clear_history)
         layout.addLayout(actions)
         return tab
 
@@ -1285,6 +1378,7 @@ class VoiceInputApp:
         for combo in (
             self.hotkey_combo,
             self.insertion_combo,
+            self.recognition_mode_combo,
             self.model_combo,
             self.decoding_combo,
             self.language_combo,
@@ -1309,7 +1403,6 @@ class VoiceInputApp:
             self.commands_check,
             self.use_local_ai_check,
             self.sound_feedback_check,
-            self.history_enabled_check,
             self.start_minimized_check,
             self.autostart_check,
         ):
@@ -1617,7 +1710,7 @@ class VoiceInputApp:
     def _set_tray_color(self, color: str) -> None:
         self.tray.setIcon(self._make_icon(color))
 
-    def _refresh_devices(self) -> None:
+    def _refresh_devices(self, *, announce: bool = False) -> None:
         try:
             self.devices = list_input_devices()
         except Exception as exc:
@@ -1638,6 +1731,19 @@ class VoiceInputApp:
 
         index = self.device_combo.findData(selected_device)
         self.device_combo.setCurrentIndex(index if index >= 0 else 0)
+        if announce:
+            available_count = max(0, self.device_combo.count() - 1)
+            self.microphone_test_status.setText(
+                "Список микрофонов обновлён"
+                + (
+                    f" · найдено устройств: {available_count}"
+                    if available_count
+                    else " · используется системный микрофон"
+                )
+            )
+            self.microphone_test_status.setStyleSheet(
+                f"color: {SUCCESS}; font-size: 8pt; font-weight: 600;"
+            )
 
     def _test_microphone(self) -> None:
         if self._microphone_test_running:
@@ -1693,7 +1799,7 @@ class VoiceInputApp:
         self._microphone_test_running = False
         self._microphone_test_recorder = None
         self.microphone_test_button.setEnabled(True)
-        self.microphone_test_button.setText("Тест микрофона")
+        self.microphone_test_button.setText("Проверить микрофон")
 
     def _handle_microphone_test_result(
         self,
@@ -1767,9 +1873,12 @@ class VoiceInputApp:
 
     def _reset_diagnostics_button(self) -> None:
         self.diagnostics_button.setEnabled(True)
-        self.diagnostics_button.setText("Диагностика")
+        self.diagnostics_button.setText("Скопировать диагностику")
 
     def _populate_from_config(self) -> None:
+        self.recognition_mode_combo.setCurrentText(
+            RECOGNITION_MODE_OPTIONS[self.config.recognition_mode]
+        )
         self.model_combo.setCurrentText(MODEL_OPTIONS[self.config.model])
         self.decoding_combo.setCurrentText(
             DECODING_OPTIONS[self.config.decoding_mode]
@@ -1795,8 +1904,11 @@ class VoiceInputApp:
         self.app_profiles_edit.setPlainText(self.config.app_profiles)
         self.project_context_edit.setText(self.config.project_context)
         self.custom_instruction_edit.setPlainText(self.config.custom_instruction)
+        self.history_enabled_check.blockSignals(True)
         self.history_enabled_check.setChecked(self.config.history_enabled)
+        self.history_enabled_check.blockSignals(False)
         self.ollama_model_edit.setText(self.config.ollama_model)
+        self._update_recognition_controls()
         self._update_mode_description()
         self.onboarding_hint.setVisible(not self.config.onboarding_complete)
         self._refresh_history()
@@ -1825,6 +1937,61 @@ class VoiceInputApp:
         self.hotkey_edit.setVisible(visible)
         if self.hotkey_edit_label is not None:
             self.hotkey_edit_label.setVisible(visible)
+
+    def _update_recognition_controls(self, _index: int = -1) -> None:
+        reverse_modes = _reverse_map(RECOGNITION_MODE_OPTIONS)
+        mode = reverse_modes.get(
+            self.recognition_mode_combo.currentText(),
+            "auto",
+        )
+        local = mode == "local"
+        self.model_combo.setEnabled(local)
+        self.decoding_combo.setEnabled(local)
+        if mode == "cloud":
+            text = (
+                "Аудио отправляется на бесплатную публичную службу. "
+                "При недоступности сервера Речка включит локальный резерв."
+            )
+        elif local:
+            text = (
+                "Аудио остаётся на компьютере. На слабом процессоре выберите "
+                "Tiny или Base и скорость «Быстро»."
+            )
+        else:
+            text = (
+                f"Речка рекомендует {self.computer.recommended_model.capitalize()} "
+                f"для этого компьютера ({self.computer.expected_local_speed}). "
+                "Способ распознавания переключится автоматически."
+            )
+        self.recognition_status_label.setText(text)
+
+    def _toggle_advanced_processing(self, visible: bool) -> None:
+        self.advanced_processing_frame.setVisible(visible)
+        self.advanced_processing_button.setText(
+            "Скрыть дополнительную обработку"
+            if visible
+            else "Показать дополнительную обработку"
+        )
+
+    def _toggle_app_profiles(self, visible: bool) -> None:
+        self.app_profiles_frame.setVisible(visible)
+        self.app_profiles_button.setText(
+            "Скрыть профили программ"
+            if visible
+            else "Показать профили программ"
+        )
+
+    def _insert_snippet_example(self) -> None:
+        example = (
+            "моя подпись => С уважением, Иван\n"
+            "ответ клиенту => Спасибо за сообщение! Я отвечу в ближайшее время."
+        )
+        current = self.snippets_edit.toPlainText().strip()
+        if not current:
+            self.snippets_edit.setPlainText(example)
+        elif "моя подпись =>" not in current:
+            self.snippets_edit.append(example)
+        self.snippets_edit.setFocus()
 
     def _selected_hotkey(self) -> str:
         reverse_hotkeys = _reverse_map(HOTKEY_OPTIONS)
@@ -1935,6 +2102,10 @@ class VoiceInputApp:
         self.cancel_hotkey.stop()
 
     def _initialize_recognition(self) -> None:
+        self._recognition_generation += 1
+        generation = self._recognition_generation
+        # Отбрасываем завершения загрузки от предыдущего режима.
+        self._model_generation += 1
         self.state = "loading"
         self._recognition_ready = False
         self._set_main_recording_feedback(False)
@@ -1943,9 +2114,19 @@ class VoiceInputApp:
         self.record_button.setEnabled(False)
         self._style_primary_button(self.record_button, ACID)
         self.progress.show()
+
+        if self.config.recognition_mode == "local":
+            self._cloud_provider = None
+            self._cloud_fallback_provider = None
+            self.runtime_summary_label.setText(
+                "Выбран локальный режим: аудио не отправляется в интернет."
+            )
+            self._load_model(self.config.model)
+            return
+
         prefer_cloud = self._computer_prefers_cloud()
         if not prefer_cloud:
-            self._load_model(self.computer.recommended_model)
+            self._load_model(self.config.model)
 
         def worker() -> None:
             windows = probe_windows_online_speech(
@@ -1959,7 +2140,7 @@ class VoiceInputApp:
             self.events.put(
                 (
                     "recognition_initialized",
-                    (provider, windows, public_results),
+                    (generation, provider, windows, public_results),
                 )
             )
 
@@ -1970,6 +2151,10 @@ class VoiceInputApp:
         ).start()
 
     def _computer_prefers_cloud(self) -> bool:
+        if self.config.recognition_mode == "cloud":
+            return True
+        if self.config.recognition_mode == "local":
+            return False
         return self.computer.preferred_recognition == "cloud"
 
     def _activate_cloud_provider(
@@ -2004,6 +2189,8 @@ class VoiceInputApp:
 
     def _activate_local_provider(self) -> None:
         self._cloud_provider = None
+        if self.config.recognition_mode == "local":
+            self._cloud_fallback_provider = None
         self._recognition_provider_label = (
             f"Локальный Whisper {self.config.model.capitalize()}"
         )
@@ -2477,7 +2664,7 @@ class VoiceInputApp:
         clip: AudioClip,
         session: int,
     ) -> str:
-        model_name = self.computer.recommended_model
+        model_name = self.config.model
         if self.engine.model_name != model_name:
             self.engine.load(
                 model_name,
@@ -2686,6 +2873,7 @@ class VoiceInputApp:
             play_feedback("error")
 
     def save_settings(self) -> None:
+        reverse_recognition_modes = _reverse_map(RECOGNITION_MODE_OPTIONS)
         reverse_models = _reverse_map(MODEL_OPTIONS)
         reverse_decoding = _reverse_map(DECODING_OPTIONS)
         reverse_modes = _reverse_map(OUTPUT_MODE_OPTIONS)
@@ -2693,7 +2881,12 @@ class VoiceInputApp:
         reverse_languages = _reverse_map(LANGUAGE_OPTIONS)
         reverse_insertions = _reverse_map(INSERTION_OPTIONS)
 
-        old_model = self.config.model
+        old_recognition_profile = (
+            self.config.recognition_mode,
+            self.config.model,
+            self.config.decoding_mode,
+            self.config.language,
+        )
         old_hotkey = self.config.hotkey
         try:
             parse_snippets(self.snippets_edit.toPlainText())
@@ -2723,14 +2916,31 @@ class VoiceInputApp:
         ):
             return
 
-        self.config = AppConfig(
-            recognition_mode="auto",
-            model=self.computer.recommended_model,
-            decoding_mode=(
+        recognition_mode = reverse_recognition_modes.get(
+            self.recognition_mode_combo.currentText(),
+            "auto",
+        )
+        if recognition_mode == "local":
+            model = reverse_models.get(
+                self.model_combo.currentText(),
+                self.computer.recommended_model,
+            )
+            decoding_mode = reverse_decoding.get(
+                self.decoding_combo.currentText(),
+                "fast",
+            )
+        else:
+            model = self.computer.recommended_model
+            decoding_mode = (
                 "fast"
                 if self.engine.inference_profile.device == "cpu"
                 else "balanced"
-            ),
+            )
+
+        self.config = AppConfig(
+            recognition_mode=recognition_mode,
+            model=model,
+            decoding_mode=decoding_mode,
             output_mode=reverse_modes.get(
                 self.mode_combo.currentText(),
                 "communication",
@@ -2756,18 +2966,12 @@ class VoiceInputApp:
             app_profiles=self.app_profiles_edit.toPlainText().strip(),
             project_context=self.project_context_edit.text().strip(),
             custom_instruction=self.custom_instruction_edit.toPlainText().strip(),
-            history_enabled=self.history_enabled_check.isChecked(),
+            history_enabled=self.config.history_enabled,
             use_local_ai=self.use_local_ai_check.isChecked(),
             ollama_model=self.ollama_model_edit.text().strip() or "qwen3:4b",
-            beam_size=DECODING_BEAM_SIZES[
-                (
-                    "fast"
-                    if self.engine.inference_profile.device == "cpu"
-                    else "balanced"
-                )
-            ],
+            beam_size=DECODING_BEAM_SIZES[decoding_mode],
             onboarding_complete=True,
-            settings_revision=6,
+            settings_revision=7,
         )
         save_config(self.config)
         self._mark_settings_saved()
@@ -2788,10 +2992,17 @@ class VoiceInputApp:
             f"{hotkey_label(self.config.hotkey)} — закончить · Esc — отменить"
         )
         self._update_mode_description()
+        self._update_recognition_controls()
         self.onboarding_hint.hide()
         self._refresh_history()
-        if self.config.model != old_model and self._cloud_provider is None:
-            self._load_model(self.config.model)
+        new_recognition_profile = (
+            self.config.recognition_mode,
+            self.config.model,
+            self.config.decoding_mode,
+            self.config.language,
+        )
+        if new_recognition_profile != old_recognition_profile:
+            self._initialize_recognition()
         else:
             self._set_status("Настройки сохранены", SUCCESS)
 
@@ -3125,18 +3336,43 @@ class VoiceInputApp:
         self.save_settings()
         self._set_status("Персонализация импортирована и сохранена", SUCCESS)
 
+    def _set_history_enabled(self, enabled: bool) -> None:
+        self.config.history_enabled = bool(enabled)
+        try:
+            save_config(self.config)
+        except OSError as exc:
+            self.history_enabled_check.blockSignals(True)
+            self.history_enabled_check.setChecked(not enabled)
+            self.history_enabled_check.blockSignals(False)
+            self.config.history_enabled = not enabled
+            QMessageBox.warning(
+                self.window,
+                "История",
+                f"Не удалось сохранить настройку истории:\n{exc}",
+            )
+            return
+        self._refresh_history()
+        self._set_status(
+            "История включена" if enabled else "История выключена",
+            SUCCESS if enabled else MUTED,
+        )
+
     def _refresh_history(self) -> None:
         if not self.config.history_enabled:
             self.history_status.setText(
                 "История выключена. Речка не сохраняет распознанный текст. "
-                "Включить её можно в разделе «Персонализация»."
+                "Включите переключатель выше, если хотите видеть прошлые записи."
             )
             self.history_view.setPlainText("История не ведётся.")
+            self.copy_history_button.setEnabled(False)
+            self.clear_history_button.setEnabled(False)
             return
         entries = load_history(limit=50)
         self.history_status.setText(
             f"Сохранено локально: {len(entries)} из последних 50 записей. Аудио не хранится."
         )
+        self.copy_history_button.setEnabled(bool(entries))
+        self.clear_history_button.setEnabled(bool(entries))
         if not entries:
             self.history_view.setPlainText("История пока пуста.")
             return
@@ -3304,18 +3540,20 @@ class VoiceInputApp:
                 if self.state == "loading":
                     self._set_status(payload, MUTED)
             elif event == "recognition_initialized":
-                provider, windows, public_results = payload
+                generation, provider, windows, public_results = payload
+                if generation != self._recognition_generation:
+                    continue
                 if provider is not None:
                     self._cloud_fallback_provider = provider
                     if self._computer_prefers_cloud():
                         self._activate_cloud_provider(provider)
                     else:
                         self.runtime_summary_label.setText(
-                            "На этом компьютере встроенный Base обычно "
+                            "На этом компьютере локальная модель "
+                            f"{self.config.model.capitalize()} обычно "
                             "быстрее сетевой очереди. Бесплатный сервер "
                             "подготовлен как автоматический резерв."
                         )
-                        self._load_model(self.computer.recommended_model)
                 else:
                     details = [windows.detail]
                     details.extend(item.detail for item in public_results)
@@ -3324,7 +3562,7 @@ class VoiceInputApp:
                         "локальный резерв. " + " · ".join(details[:2])
                     )
                     if self._computer_prefers_cloud():
-                        self._load_model(self.computer.recommended_model)
+                        self._load_model(self.config.model)
             elif event == "model_error":
                 generation, text = payload
                 if generation == self._model_generation:

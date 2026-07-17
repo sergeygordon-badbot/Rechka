@@ -1,7 +1,7 @@
 #define MyAppName "Речка"
 #define MyAppExeName "Rechka.exe"
 #ifndef MyAppVersion
-#define MyAppVersion "0.7.0"
+#define MyAppVersion "0.7.1"
 #endif
 #ifndef MyAppSourceDir
 #define MyAppSourceDir "..\dist\VoiceInput-" + MyAppVersion + "\Rechka"
