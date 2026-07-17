@@ -9,6 +9,7 @@
 - ONNX Runtime — MIT License;
 - PyAV — BSD License;
 - sounddevice — MIT License;
+- Python/WinRT — MIT License;
 - PySide6 / Qt for Python — LGPL-3.0-only / GPL-3.0-only / commercial Qt license.
 
 Встроенные модели `Systran/faster-whisper-tiny` и

@@ -43,6 +43,13 @@ RUNTIME_DISTRIBUTIONS = (
     "anyio",
     "h11",
     "idna",
+    "winrt-runtime",
+    "winrt-Windows.Foundation",
+    "winrt-Windows.Foundation.Collections",
+    "winrt-Windows.Globalization",
+    "winrt-Windows.Media.SpeechRecognition",
+    "winrt-Windows.Storage",
+    "winrt-Windows.System",
 )
 QT_LICENSES = {
     "LGPL-3.0.txt": "LICENSES/LGPL-3.0-only.txt",

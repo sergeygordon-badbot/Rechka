@@ -126,14 +126,16 @@ def run_gui(minimized: bool) -> int:
 def main() -> int:
     from voice_input.config import MODEL_OPTIONS
 
-    parser = argparse.ArgumentParser(description="Локальный голосовой ввод для Windows")
+    parser = argparse.ArgumentParser(
+        description="Автоматический голосовой ввод для Windows"
+    )
     parser.add_argument("--minimized", action="store_true", help="Запустить в трее")
     parser.add_argument("--self-test", action="store_true", help="Проверить окружение")
     parser.add_argument("--transcribe", type=Path, help="Распознать аудиофайл")
     parser.add_argument(
         "--model",
         choices=tuple(MODEL_OPTIONS),
-        default="small",
+        default="base",
     )
     parser.add_argument("--language", default="ru")
     parser.add_argument("--output", type=Path, help="Записать диагностику в JSON")

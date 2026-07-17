@@ -36,7 +36,7 @@ def main() -> int:
         '041904B0',
         [
           StringStruct('CompanyName', 'EBSF'),
-          StringStruct('FileDescription', 'Речка — локальный голосовой ввод'),
+          StringStruct('FileDescription', 'Речка — умный голосовой ввод'),
           StringStruct('FileVersion', '{__version__}'),
           StringStruct('InternalName', 'Rechka'),
           StringStruct('LegalCopyright', '© 2026 EBSF'),

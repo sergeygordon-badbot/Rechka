@@ -13,6 +13,7 @@ from .hotkeys import HOTKEY_OPTIONS, normalize_hotkey
 APP_DIR_NAME = "VoiceInput"
 
 MODEL_OPTIONS = {
+    "tiny": "Tiny — самый лёгкий резерв для слабых компьютеров",
     "base": "Base — рекомендуется для CPU: быстро",
     "small": "Small — точнее Base, но заметно медленнее",
     "turbo": "Turbo — очень медленно на CPU, нужна мощная видеокарта (~1,6 ГБ)",
@@ -109,6 +110,7 @@ INSERTION_OPTIONS = {
 
 @dataclass(slots=True)
 class AppConfig:
+    recognition_mode: str = "auto"
     model: str = "base"
     decoding_mode: str = "balanced"
     output_mode: str = "communication"
@@ -132,7 +134,7 @@ class AppConfig:
     ollama_model: str = "qwen3:4b"
     beam_size: int = 2
     onboarding_complete: bool = False
-    settings_revision: int = 5
+    settings_revision: int = 6
 
 
 def data_dir() -> Path:
@@ -212,7 +214,8 @@ def load_config() -> AppConfig:
         config.use_local_ai = False
     if is_existing_before_onboarding:
         config.onboarding_complete = True
-    config.settings_revision = 5
+    config.recognition_mode = "auto"
+    config.settings_revision = 6
     config.beam_size = DECODING_BEAM_SIZES[config.decoding_mode]
     return config
 

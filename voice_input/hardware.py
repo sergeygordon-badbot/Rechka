@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import ctypes
+import os
+import sys
 from dataclasses import asdict, dataclass
 
 import ctranslate2
@@ -20,6 +23,123 @@ class InferenceProfile:
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
+class ComputerAssessment:
+    physical_cores: int
+    logical_cores: int
+    memory_gb: float
+    windows_build: int
+    accelerator: str
+    preferred_recognition: str
+    recommended_model: str
+    expected_local_speed: str
+    summary: str
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+class _MemoryStatusEx(ctypes.Structure):
+    _fields_ = (
+        ("dwLength", ctypes.c_ulong),
+        ("dwMemoryLoad", ctypes.c_ulong),
+        ("ullTotalPhys", ctypes.c_ulonglong),
+        ("ullAvailPhys", ctypes.c_ulonglong),
+        ("ullTotalPageFile", ctypes.c_ulonglong),
+        ("ullAvailPageFile", ctypes.c_ulonglong),
+        ("ullTotalVirtual", ctypes.c_ulonglong),
+        ("ullAvailVirtual", ctypes.c_ulonglong),
+        ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+    )
+
+
+def total_physical_memory() -> int:
+    status = _MemoryStatusEx()
+    status.dwLength = ctypes.sizeof(status)
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GlobalMemoryStatusEx.argtypes = (ctypes.POINTER(_MemoryStatusEx),)
+        kernel32.GlobalMemoryStatusEx.restype = ctypes.c_int
+        if kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            return int(status.ullTotalPhys)
+    except Exception:
+        pass
+    return 0
+
+
+def windows_build_number() -> int:
+    try:
+        return int(sys.getwindowsversion().build)
+    except (AttributeError, TypeError, ValueError):
+        return 0
+
+
+def assess_computer(
+    profile: InferenceProfile | None = None,
+    *,
+    memory_bytes: int | None = None,
+    build_number: int | None = None,
+    logical_cores: int | None = None,
+) -> ComputerAssessment:
+    selected = profile or detect_inference_profile()
+    physical = max(1, selected.physical_cores)
+    logical = max(1, int(logical_cores or os.cpu_count() or physical))
+    total_memory = (
+        total_physical_memory() if memory_bytes is None else max(0, memory_bytes)
+    )
+    memory_gb = round(total_memory / (1024**3), 1) if total_memory else 0.0
+    build = windows_build_number() if build_number is None else max(0, build_number)
+
+    if selected.device == "cuda":
+        accelerator = f"CUDA {selected.compute_type}"
+        preferred_recognition = "local"
+        recommended_model = "base"
+        expected_speed = "высокая"
+        summary = (
+            "Есть совместимое GPU-ускорение; встроенный локальный резерв "
+            "будет быстрым."
+        )
+    elif physical <= 2 or (memory_gb and memory_gb < 6):
+        accelerator = f"CPU {selected.compute_type.upper()}"
+        preferred_recognition = "cloud"
+        recommended_model = "tiny"
+        expected_speed = "низкая"
+        summary = (
+            "Слабый компьютер: основной выбор — системное или сетевое "
+            "распознавание, локально используется Tiny."
+        )
+    elif physical <= 4 or (memory_gb and memory_gb < 10):
+        accelerator = f"CPU {selected.compute_type.upper()}"
+        preferred_recognition = "cloud"
+        recommended_model = "base"
+        expected_speed = "средняя"
+        summary = (
+            "Компьютер среднего уровня: облачный режим предпочтительнее, "
+            "Base остаётся локальным резервом."
+        )
+    else:
+        accelerator = f"CPU {selected.compute_type.upper()}"
+        preferred_recognition = "local"
+        recommended_model = "base"
+        expected_speed = "средняя"
+        summary = (
+            "Ресурсов достаточно для локального резерва; сетевой режим "
+            "снизит задержку и нагрузку."
+        )
+
+    return ComputerAssessment(
+        physical_cores=physical,
+        logical_cores=logical,
+        memory_gb=memory_gb,
+        windows_build=build,
+        accelerator=accelerator,
+        preferred_recognition=preferred_recognition,
+        recommended_model=recommended_model,
+        expected_local_speed=expected_speed,
+        summary=summary,
+    )
 
 
 def _supported_compute_types(device: str) -> tuple[str, ...]:

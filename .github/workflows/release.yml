@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
 env:
   PYTHONUTF8: "1"
 
@@ -78,4 +82,31 @@ jobs:
             "dist\installer\VoiceInput-Setup-$version.exe" `
             "dist\installer\VoiceInput-Setup-$version.exe.sha256" `
             --title "Речка $version — публичная beta" `
-            --generate-notes
+            --generate-notes `
+            --latest
+
+      - name: Verify update channel
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          $expectedName = "Rechka-Setup-$version.exe"
+          $release = gh api "repos/${{ github.repository }}/releases/latest" |
+            ConvertFrom-Json
+          if ($release.tag_name -ne "${{ github.ref_name }}") {
+            throw "Latest release is $($release.tag_name), expected ${{ github.ref_name }}."
+          }
+          $asset = $release.assets |
+            Where-Object { $_.name -eq $expectedName } |
+            Select-Object -First 1
+          if ($null -eq $asset) {
+            throw "Latest release does not contain $expectedName."
+          }
+          if (
+            $asset.size -le 0 -or
+            $asset.digest -notmatch '^sha256:[0-9a-f]{64}$'
+          ) {
+            throw "GitHub did not publish a trusted size and SHA-256 for $expectedName."
+          }
+          Write-Host "Update channel verified: $($release.tag_name), $expectedName"

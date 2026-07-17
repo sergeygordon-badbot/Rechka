@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import ctypes
+import io
 import json
 import tempfile
 import time
@@ -9,7 +10,7 @@ import unittest
 import wave
 from importlib.metadata import PackageNotFoundError
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -52,7 +53,7 @@ from voice_input.engine import (
     parse_custom_terms,
 )
 from voice_input.diagnostics import _package_versions, collect_diagnostics
-from voice_input.hardware import detect_inference_profile
+from voice_input.hardware import InferenceProfile, assess_computer, detect_inference_profile
 from voice_input.history import append_history, clear_history, load_history
 from voice_input.hotkeys import hotkey_label, parse_hotkey
 from voice_input.prompting import (
@@ -62,6 +63,14 @@ from voice_input.prompting import (
     process_transcript,
 )
 from voice_input.quick_actions import apply_quick_action
+from voice_input.recognition import (
+    HuggingFaceSpaceProvider,
+    RecognitionMetrics,
+    RecognitionProviderError,
+    encode_mono_wav,
+    parse_gradio_sse,
+    timed_provider_transcription,
+)
 from voice_input.personalization import (
     combine_custom_terms,
     expand_snippet,
@@ -721,6 +730,117 @@ class HardwareTests(unittest.TestCase):
         self.assertEqual(profile.compute_type, "int8")
         self.assertEqual(profile.physical_cores, 6)
 
+    def test_weak_computer_gets_tiny_local_fallback(self) -> None:
+        profile = InferenceProfile(
+            device="cpu",
+            compute_type="int8",
+            device_index=0,
+            cuda_device_count=0,
+            cpu_compute_types=("int8", "float32"),
+            cuda_compute_types=(),
+            physical_cores=2,
+        )
+        assessment = assess_computer(
+            profile,
+            memory_bytes=4 * 1024**3,
+            build_number=19_045,
+            logical_cores=4,
+        )
+        self.assertEqual(assessment.recommended_model, "tiny")
+        self.assertEqual(assessment.preferred_recognition, "cloud")
+        self.assertEqual(assessment.expected_local_speed, "низкая")
+        self.assertEqual(assessment.memory_gb, 4.0)
+
+    def test_regular_cpu_gets_base_instead_of_medium(self) -> None:
+        profile = InferenceProfile(
+            device="cpu",
+            compute_type="int8",
+            device_index=0,
+            cuda_device_count=0,
+            cpu_compute_types=("int8", "float32"),
+            cuda_compute_types=(),
+            physical_cores=8,
+        )
+        assessment = assess_computer(
+            profile,
+            memory_bytes=16 * 1024**3,
+            logical_cores=16,
+        )
+        self.assertEqual(assessment.recommended_model, "base")
+        self.assertEqual(assessment.preferred_recognition, "local")
+
+
+class RecognitionProviderTests(unittest.TestCase):
+    def test_wav_encoding_is_mono_pcm16(self) -> None:
+        payload = encode_mono_wav(
+            np.array([-1.0, -0.5, 0.0, 0.5, 1.0], dtype=np.float32)
+        )
+        with wave.open(io.BytesIO(payload), "rb") as source:
+            self.assertEqual(source.getnchannels(), 1)
+            self.assertEqual(source.getsampwidth(), 2)
+            self.assertEqual(source.getframerate(), 16_000)
+            pcm = np.frombuffer(source.readframes(5), dtype="<i2")
+        self.assertEqual(pcm.tolist(), [-32767, -16384, 0, 16384, 32767])
+
+    def test_gradio_complete_event_is_parsed(self) -> None:
+        payload = (
+            'event: heartbeat\ndata: null\n\n'
+            'event: complete\ndata: ["Проверка распознавания."]\n\n'
+        )
+        self.assertEqual(
+            parse_gradio_sse(payload),
+            ["Проверка распознавания."],
+        )
+
+    def test_hugging_face_protocol_uploads_and_reads_result(self) -> None:
+        provider = HuggingFaceSpaceProvider(
+            provider_id="test",
+            label="Test Space",
+            base_url="https://example.test",
+            endpoint="/transcribe",
+        )
+        upload = Mock()
+        upload.raise_for_status.return_value = None
+        upload.json.return_value = ["/tmp/test.wav"]
+        submitted = Mock()
+        submitted.raise_for_status.return_value = None
+        submitted.json.return_value = {"event_id": "event-1"}
+        result = Mock()
+        result.raise_for_status.return_value = None
+        result.text = 'event: complete\ndata: ["Готовый текст"]\n\n'
+        client = Mock()
+        client.post.side_effect = [upload, submitted]
+        client.get.return_value = result
+
+        text = provider.transcribe(
+            np.zeros(16_000, dtype=np.float32),
+            client=client,
+        )
+
+        self.assertEqual(text, "Готовый текст")
+        self.assertEqual(client.post.call_count, 2)
+        request_payload = client.post.call_args_list[1].kwargs["json"]["data"]
+        self.assertEqual(request_payload[1], "transcribe")
+        self.assertEqual(request_payload[0]["meta"]["_type"], "gradio.FileData")
+
+    def test_speed_label_explains_real_time_factor(self) -> None:
+        fast = RecognitionMetrics("test", "Test", 10.0, 2.0)
+        slow = RecognitionMetrics("test", "Test", 10.0, 15.0)
+        self.assertEqual(fast.speed_label, "5.0× быстрее реального времени")
+        self.assertEqual(slow.speed_label, "1.5× длительности записи")
+
+    def test_cloud_request_has_hard_deadline(self) -> None:
+        provider = Mock()
+        provider.provider_id = "slow-test"
+        provider.label = "Slow Test"
+        provider.transcribe.side_effect = lambda *_args, **_kwargs: time.sleep(2)
+        with self.assertRaisesRegex(RecognitionProviderError, "0.01 секунд"):
+            timed_provider_transcription(
+                provider,
+                np.zeros(100, dtype=np.float32),
+                deadline_seconds=0.01,
+            )
+
 
 class ConfigTests(unittest.TestCase):
     def test_round_trip(self) -> None:
@@ -789,7 +909,7 @@ class ConfigTests(unittest.TestCase):
                 self.assertEqual(actual.decoding_mode, "balanced")
                 self.assertEqual(actual.hotkey, "Ctrl+Space")
                 self.assertFalse(actual.use_local_ai)
-                self.assertEqual(actual.settings_revision, 5)
+                self.assertEqual(actual.settings_revision, 6)
                 self.assertTrue(actual.onboarding_complete)
         finally:
             if previous is None:
@@ -908,6 +1028,9 @@ class UpdaterTests(unittest.TestCase):
 
         self.assertIsNotNone(update)
         self.assertTrue(get.call_args.kwargs["follow_redirects"])
+        headers = get.call_args.kwargs["headers"]
+        self.assertEqual(headers["Cache-Control"], "no-cache")
+        self.assertEqual(headers["Pragma"], "no-cache")
 
     def test_update_prefers_rechka_installer_over_legacy_copy(self) -> None:
         payload = {
@@ -943,6 +1066,57 @@ class UpdaterTests(unittest.TestCase):
         assert update is not None
         self.assertEqual(update.asset.name, "Rechka-Setup-0.6.1.exe")
         self.assertEqual(update.asset.sha256, "b" * 64)
+
+    def test_required_update_dialog_has_no_later_option(self) -> None:
+        payload = {
+            "tag_name": "v0.7.0",
+            "html_url": "https://github.com/example/rechka/releases/tag/v0.7.0",
+            "draft": False,
+            "body": "Обязательное обновление",
+            "assets": [
+                {
+                    "name": "Rechka-Setup-0.7.0.exe",
+                    "browser_download_url": (
+                        "https://github.com/example/rechka/releases/download/"
+                        "v0.7.0/Rechka-Setup-0.7.0.exe"
+                    ),
+                    "size": 123,
+                    "digest": "sha256:" + "a" * 64,
+                }
+            ],
+        }
+        update = update_from_release_payload(payload, "0.6.2")
+        assert update is not None
+
+        class FakeApp:
+            _closing = False
+            _update_prompt_open = False
+            _update_in_progress = False
+            _microphone_test_running = False
+            state = "ready"
+            window = object()
+            update_status = Mock()
+            show_window = Mock()
+            _download_update = Mock()
+            exit_app = Mock()
+
+        from voice_input.app import VoiceInputApp
+
+        fake = FakeApp()
+        with patch("voice_input.app.QMessageBox") as message_box:
+            dialog = message_box.return_value
+            install_button = object()
+            exit_button = object()
+            dialog.addButton.side_effect = [install_button, exit_button]
+            dialog.clickedButton.return_value = install_button
+
+            VoiceInputApp._prompt_required_update(fake, update)
+
+        labels = [call.args[0] for call in dialog.addButton.call_args_list]
+        self.assertEqual(labels, ["Обновить сейчас", "Закрыть Речку"])
+        fake.show_window.assert_called_once_with()
+        fake._download_update.assert_called_once_with(update)
+        fake.exit_app.assert_not_called()
 
     def test_update_installer_runs_silently_and_closes_the_app(self) -> None:
         previous = os.environ.get("VOICE_INPUT_DATA_DIR")

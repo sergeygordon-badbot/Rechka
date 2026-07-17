@@ -12,7 +12,7 @@ import sounddevice as sd
 from . import __version__
 from .audio import PREVIEW_BUFFER_SECONDS, TARGET_SAMPLE_RATE, list_input_devices
 from .engine import DEFAULT_VAD_PROFILE, VAD_PROFILES
-from .hardware import detect_inference_profile
+from .hardware import assess_computer, detect_inference_profile
 
 
 _PACKAGE_MODULES = {
@@ -21,6 +21,8 @@ _PACKAGE_MODULES = {
     "av": "av",
     "sounddevice": "sounddevice",
     "PySide6": "PySide6",
+    "httpx": "httpx",
+    "winrt-runtime": "winrt",
 }
 
 
@@ -53,14 +55,18 @@ def collect_diagnostics(
     *,
     selected_device_index: int | None = None,
     model_name: str | None = None,
+    provider_label: str | None = None,
 ) -> dict[str, object]:
     errors: list[str] = []
     try:
-        inference_profile: dict[str, object] = (
-            detect_inference_profile().to_dict()
-        )
+        detected_profile = detect_inference_profile()
+        inference_profile: dict[str, object] = detected_profile.to_dict()
+        computer_assessment: dict[str, object] = assess_computer(
+            detected_profile
+        ).to_dict()
     except Exception as exc:
         inference_profile = {"error": str(exc)}
+        computer_assessment = {"error": str(exc)}
         errors.append(f"inference_profile: {exc}")
 
     try:
@@ -80,6 +86,7 @@ def collect_diagnostics(
         "cpu_count": os.cpu_count(),
         "packages": _package_versions(),
         "inference_profile": inference_profile,
+        "computer_assessment": computer_assessment,
         "model": model_name,
         "selected_device_index": selected_device_index,
         "default_device": default_device,
@@ -90,6 +97,8 @@ def collect_diagnostics(
             "temporary_local_spool": True,
         },
         "recognition": {
+            "mode": "auto",
+            "active_provider": provider_label,
             "vad_profile": DEFAULT_VAD_PROFILE,
             "vad_parameters": VAD_PROFILES[DEFAULT_VAD_PROFILE].to_dict(),
             "condition_on_previous_text": "long-recordings-only",

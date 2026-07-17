@@ -83,6 +83,7 @@ Remove-PreviousBuildDirectory -LiteralPath $distPath
     --workpath $workPath `
     --distpath $distPath `
     --collect-all faster_whisper `
+    --collect-all winrt `
     (Join-Path $PSScriptRoot "main.py")
 
 if ($LASTEXITCODE -ne 0) {
@@ -90,7 +91,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $target = Join-Path $distPath "Rechka"
-foreach ($modelName in @("base")) {
+foreach ($modelName in @("tiny", "base")) {
     $modelSource = Join-Path $PSScriptRoot "models\faster-whisper-$modelName"
     $modelTarget = Join-Path $target "models\faster-whisper-$modelName"
     if (-not (Test-Path -LiteralPath $modelSource)) {

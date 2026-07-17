@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from PySide6.QtCore import QMimeData, Qt, QTimer
 from PySide6.QtGui import (
     QAction,
@@ -54,6 +55,7 @@ from .audio import (
     analyze_audio,
     has_recordable_signal,
     list_input_devices,
+    prepare_audio_for_whisper,
 )
 from .config import (
     AI_TARGET_OPTIONS,
@@ -69,11 +71,14 @@ from .config import (
 )
 from .engine import (
     WhisperEngine,
+    apply_custom_terms,
+    detect_speech_regions,
     is_reliable_preview_text,
     merge_incremental_transcript,
     normalize_transcript,
 )
 from .diagnostics import collect_diagnostics
+from .hardware import assess_computer
 from .history import append_history, clear_history, load_history
 from .hotkeys import HOTKEY_OPTIONS, hotkey_label, parse_hotkey
 from .personalization import (
@@ -85,6 +90,12 @@ from .personalization import (
 )
 from .prompting import ProcessedText, process_transcript
 from .quick_actions import QUICK_ACTION_OPTIONS, apply_quick_action
+from .recognition import (
+    HuggingFaceSpaceProvider,
+    RecognitionMetrics,
+    find_public_hugging_face_provider,
+    timed_provider_transcription,
+)
 from .updater import (
     UpdateInfo,
     check_for_update,
@@ -104,6 +115,7 @@ from .windows import (
     set_autostart,
     window_process_name,
 )
+from .windows_speech import probe_windows_online_speech
 
 
 BG = "#F3F1EB"
@@ -117,6 +129,8 @@ ACID = "#C7FF36"
 MINT = "#71E5BD"
 RECORD = "#E5484D"
 SUCCESS = "#10A37F"
+UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
+UPDATE_RETRY_INTERVAL_MS = 10 * 60 * 1000
 
 
 def _reverse_map(mapping: dict[str, str]) -> dict[str, str]:
@@ -259,14 +273,19 @@ class VoiceInputApp:
     ) -> None:
         self.application = application
         self.config = load_config()
-        try:
-            save_config(self.config)
-        except OSError:
-            pass
         self.start_minimized = start_minimized or self.config.start_minimized
         self.events: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.recorder = AudioRecorder()
         self.engine = WhisperEngine()
+        self.computer = assess_computer(self.engine.inference_profile)
+        self.config.model = self.computer.recommended_model
+        if self.engine.inference_profile.device == "cpu":
+            self.config.decoding_mode = "fast"
+            self.config.beam_size = DECODING_BEAM_SIZES["fast"]
+        try:
+            save_config(self.config)
+        except OSError:
+            pass
         self.hotkey = GlobalHotkey()
         self.cancel_hotkey = GlobalHotkey()
         self._registered_hotkey: str | None = None
@@ -291,8 +310,15 @@ class VoiceInputApp:
         self._active_snippets = self.config.snippets
         self._active_application_name = ""
         self._active_custom_instruction = self.config.custom_instruction
+        self._cloud_provider: HuggingFaceSpaceProvider | None = None
+        self._cloud_fallback_provider: HuggingFaceSpaceProvider | None = None
+        self._recognition_ready = False
+        self._recognition_provider_label = "Автовыбор"
+        self._last_recognition_speed = "ещё не измерена"
         self._update_repository = configured_repository()
         self._update_in_progress = False
+        self._required_update: UpdateInfo | None = None
+        self._update_prompt_open = False
         self._settings_dirty = False
         self._show_settings_event = show_settings_event
         self.devices: list[dict[str, Any]] = []
@@ -308,12 +334,24 @@ class VoiceInputApp:
         self.target_combo.currentIndexChanged.connect(self._on_ai_target_changed)
         self._start_tray()
         self._register_hotkey()
-        self._load_model(self.config.model)
 
         self.timer = QTimer()
         self.timer.timeout.connect(self._process_events)
         self.timer.start(50)
+        self.update_timer = QTimer()
+        self.update_timer.setInterval(UPDATE_CHECK_INTERVAL_MS)
+        self.update_timer.timeout.connect(
+            lambda: self.check_for_updates(manual=False)
+        )
+        self.update_retry_timer = QTimer()
+        self.update_retry_timer.setSingleShot(True)
+        self.update_retry_timer.setInterval(UPDATE_RETRY_INTERVAL_MS)
+        self.update_retry_timer.timeout.connect(
+            lambda: self.check_for_updates(manual=False)
+        )
+        self._initialize_recognition()
         if self._update_repository:
+            self.update_timer.start()
             QTimer.singleShot(5000, lambda: self.check_for_updates(manual=False))
 
         if self.start_minimized:
@@ -485,18 +523,18 @@ class VoiceInputApp:
         )
         title_layout.addWidget(brand)
 
-        local_badge = QLabel("ЛОКАЛЬНО")
-        local_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        local_badge.setFixedHeight(24)
-        local_badge.setStyleSheet(
+        self.runtime_badge = QLabel("АВТО")
+        self.runtime_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.runtime_badge.setFixedHeight(24)
+        self.runtime_badge.setStyleSheet(
             f"color: {TEXT}; background: #E8FFC2; border-radius: 8px; "
             "padding: 0 8px; font-size: 7pt; font-weight: 700;"
         )
-        local_badge.setAttribute(
+        self.runtime_badge.setAttribute(
             Qt.WidgetAttribute.WA_TransparentForMouseEvents,
             True,
         )
-        title_layout.addWidget(local_badge)
+        title_layout.addWidget(self.runtime_badge)
         title_layout.addStretch()
 
         minimize = QPushButton("—")
@@ -630,6 +668,52 @@ class VoiceInputApp:
         self.mode_description.setStyleSheet(f"color: {MUTED}; font-size: 8.5pt;")
         mode_layout.addWidget(self.mode_description)
         layout.addWidget(mode_card)
+
+        runtime_card = QFrame()
+        runtime_card.setStyleSheet(
+            f"QFrame {{ background: {CARD}; border: 1px solid {BORDER}; "
+            "border-radius: 14px; }}"
+            "QLabel { border: 0; background: transparent; }"
+        )
+        runtime_layout = QVBoxLayout(runtime_card)
+        runtime_layout.setContentsMargins(16, 13, 16, 13)
+        runtime_layout.setSpacing(7)
+
+        runtime_title = QLabel("Автонастройка компьютера")
+        runtime_title.setStyleSheet(f"color: {TEXT}; font-weight: 700;")
+        runtime_layout.addWidget(runtime_title)
+
+        self.runtime_mode_label = QLabel("Режим: проверяю доступные службы…")
+        self.runtime_model_label = QLabel(
+            f"Локальный резерв: {self.computer.recommended_model.capitalize()}"
+        )
+        memory = (
+            f" · {self.computer.memory_gb:g} ГБ ОЗУ"
+            if self.computer.memory_gb
+            else ""
+        )
+        self.runtime_computer_label = QLabel(
+            f"Компьютер: {self.computer.accelerator}"
+            f" · {self.computer.physical_cores} ядер{memory}"
+        )
+        self.runtime_speed_label = QLabel("Скорость: ещё не измерена")
+        for label in (
+            self.runtime_mode_label,
+            self.runtime_model_label,
+            self.runtime_computer_label,
+            self.runtime_speed_label,
+        ):
+            label.setWordWrap(True)
+            label.setStyleSheet(f"color: {MUTED}; font-size: 8.5pt;")
+            runtime_layout.addWidget(label)
+
+        self.runtime_summary_label = QLabel(self.computer.summary)
+        self.runtime_summary_label.setWordWrap(True)
+        self.runtime_summary_label.setStyleSheet(
+            f"color: {TEXT}; font-size: 8.5pt; font-weight: 600;"
+        )
+        runtime_layout.addWidget(self.runtime_summary_label)
+        layout.addWidget(runtime_card)
 
         record_card = QFrame()
         self.record_card = record_card
@@ -920,10 +1004,19 @@ class VoiceInputApp:
         recognition, recognition_layout = make_section("Распознавание")
         recognition_form = make_form()
         self.model_combo = make_settings_combo(list(MODEL_OPTIONS.values()))
-        recognition_form.addRow("Модель", self.model_combo)
+        self.model_combo.setEnabled(False)
+        self.model_combo.setToolTip(
+            "Локальная резервная модель выбирается автоматически "
+            "по характеристикам компьютера."
+        )
+        recognition_form.addRow("Локальный резерв", self.model_combo)
 
         self.decoding_combo = make_settings_combo(
             list(DECODING_OPTIONS.values())
+        )
+        self.decoding_combo.setEnabled(False)
+        self.decoding_combo.setToolTip(
+            "Скорость локального декодирования выбрана автоматически."
         )
         recognition_form.addRow("Скорость", self.decoding_combo)
 
@@ -1659,6 +1752,7 @@ class VoiceInputApp:
                 payload = collect_diagnostics(
                     selected_device_index=selected_device,
                     model_name=model_name,
+                    provider_label=self._recognition_provider_label,
                 )
             except Exception as exc:
                 self.events.put(("diagnostics_error", str(exc)))
@@ -1840,9 +1934,111 @@ class VoiceInputApp:
     def _stop_cancel_hotkey(self) -> None:
         self.cancel_hotkey.stop()
 
+    def _initialize_recognition(self) -> None:
+        self.state = "loading"
+        self._recognition_ready = False
+        self._set_main_recording_feedback(False)
+        self._set_status("Анализирую компьютер и доступные службы…", MUTED)
+        self.record_button.setText("Автонастройка…")
+        self.record_button.setEnabled(False)
+        self._style_primary_button(self.record_button, ACID)
+        self.progress.show()
+        prefer_cloud = self._computer_prefers_cloud()
+        if not prefer_cloud:
+            self._load_model(self.computer.recommended_model)
+
+        def worker() -> None:
+            windows = probe_windows_online_speech(
+                "en-US" if self.config.language == "en" else "ru-RU"
+            )
+            provider, public_results = find_public_hugging_face_provider(
+                status=lambda text: self.events.put(
+                    ("recognition_status", text)
+                )
+            )
+            self.events.put(
+                (
+                    "recognition_initialized",
+                    (provider, windows, public_results),
+                )
+            )
+
+        threading.Thread(
+            target=worker,
+            name="recognition-initializer",
+            daemon=True,
+        ).start()
+
+    def _computer_prefers_cloud(self) -> bool:
+        return self.computer.preferred_recognition == "cloud"
+
+    def _activate_cloud_provider(
+        self,
+        provider: HuggingFaceSpaceProvider,
+    ) -> None:
+        self._cloud_provider = provider
+        self._cloud_fallback_provider = provider
+        self._recognition_ready = True
+        self._recognition_provider_label = provider.label
+        self.state = "ready"
+        self.progress.hide()
+        self.record_button.setText("Начать запись")
+        self.record_button.setEnabled(True)
+        self._style_primary_button(self.record_button, ACID)
+        self._set_status("Готово к диктовке", SUCCESS)
+        self._set_tray_color(ACCENT)
+        self.runtime_badge.setText("ОБЛАКО")
+        self.runtime_mode_label.setText(
+            f"Режим: {provider.label} · без ключа"
+        )
+        self.runtime_model_label.setText(
+            "Локальный резерв: "
+            f"{self.computer.recommended_model.capitalize()} · "
+            "загрузится только при необходимости"
+        )
+        self.runtime_summary_label.setText(
+            "Аудио обрабатывается публичным сервером. Если он недоступен "
+            "или ограничит запросы, Речка автоматически перейдёт на "
+            "локальный резерв."
+        )
+
+    def _activate_local_provider(self) -> None:
+        self._cloud_provider = None
+        self._recognition_provider_label = (
+            f"Локальный Whisper {self.config.model.capitalize()}"
+        )
+        self.runtime_badge.setText("ЛОКАЛЬНО")
+        self.runtime_mode_label.setText(
+            f"Режим: {self._recognition_provider_label}"
+        )
+        self.runtime_model_label.setText(
+            f"Модель: {self.config.model.capitalize()} · "
+            f"ожидаемая скорость {self.computer.expected_local_speed}"
+        )
+
+    def _update_recognition_metrics(
+        self,
+        metrics: RecognitionMetrics,
+    ) -> None:
+        self._recognition_provider_label = metrics.provider_label
+        self._last_recognition_speed = metrics.speed_label
+        self.runtime_badge.setText(
+            "ЛОКАЛЬНО"
+            if metrics.provider_id == "local_whisper"
+            else "ОБЛАКО"
+        )
+        self.runtime_speed_label.setText(
+            f"Скорость: {metrics.speed_label} · "
+            f"{metrics.elapsed_seconds:.1f} с обработки"
+        )
+        self.runtime_mode_label.setText(
+            f"Последнее распознавание: {metrics.provider_label}"
+        )
+
     def _load_model(self, model_name: str) -> None:
         self._model_generation += 1
         generation = self._model_generation
+        self._activate_local_provider()
         self.state = "loading"
         self._set_main_recording_feedback(False)
         self._set_status("Подготовка Whisper…", MUTED)
@@ -1881,6 +2077,16 @@ class VoiceInputApp:
         )
 
     def toggle_recording(self) -> None:
+        if self._required_update is not None:
+            if self._update_in_progress:
+                self.show_window()
+                self._set_status(
+                    "Сначала завершите обязательное обновление",
+                    MUTED,
+                )
+            else:
+                self._prompt_required_update(self._required_update)
+            return
         if self._microphone_test_running:
             self._set_status("Сначала завершите проверку микрофона", MUTED)
             return
@@ -1952,12 +2158,9 @@ class VoiceInputApp:
         )
         self._set_tray_color(RECORD)
         self._start_cancel_hotkey()
-        threading.Thread(
-            target=self._live_preview_worker,
-            args=(session, self._preview_stop),
-            name="live-preview",
-            daemon=True,
-        ).start()
+        # Repeated preview decoding used the same Whisper lock as the final
+        # result and could make a weak CPU look completely frozen. The level
+        # meter remains live, while recognition now runs once after recording.
 
     def _stop_recording(self) -> None:
         self._stop_cancel_hotkey()
@@ -2129,13 +2332,7 @@ class VoiceInputApp:
         output_mode: str,
     ) -> None:
         try:
-            text = self.engine.transcribe(
-                clip.samples,
-                language=self._active_language,
-                beam_size=DECODING_BEAM_SIZES[self.config.decoding_mode],
-                custom_terms=self._active_custom_terms,
-                punctuation_commands=self.config.punctuation_commands,
-            )
+            text = self._recognize_clip(clip, session)
             if not text:
                 self.events.put(
                     ("transcript", (session, text, ProcessedText(text="")))
@@ -2191,6 +2388,132 @@ class VoiceInputApp:
         except Exception as exc:
             self.events.put(("error", f"Ошибка распознавания: {exc}"))
 
+    def _recognize_clip(self, clip: AudioClip, session: int) -> str:
+        provider = self._cloud_provider
+        if provider is not None:
+            try:
+                return self._recognize_with_cloud(
+                    provider,
+                    clip,
+                    session,
+                )
+            except Exception as exc:
+                self._cloud_provider = None
+                self._recognition_ready = False
+                self.events.put(
+                    (
+                        "processing_stage",
+                        (
+                            session,
+                            "Бесплатный сервер недоступен — "
+                            "перехожу на локальный резерв…",
+                        ),
+                    )
+                )
+                self.events.put(
+                    (
+                        "provider_warning",
+                        f"{provider.label}: {exc}",
+                    )
+                )
+
+        try:
+            return self._recognize_with_local(clip, session)
+        except Exception:
+            fallback = self._cloud_fallback_provider
+            if fallback is None:
+                raise
+            self.events.put(
+                (
+                    "processing_stage",
+                    (
+                        session,
+                        "Локальный резерв недоступен — "
+                        "перехожу на бесплатный сервер…",
+                    ),
+                )
+            )
+            self._cloud_provider = fallback
+            self._recognition_ready = True
+            return self._recognize_with_cloud(fallback, clip, session)
+
+    def _recognize_with_cloud(
+        self,
+        provider: HuggingFaceSpaceProvider,
+        clip: AudioClip,
+        session: int,
+    ) -> str:
+        prepared = prepare_audio_for_whisper(clip.samples)
+        speech_regions = detect_speech_regions(prepared)
+        if not speech_regions:
+            return ""
+        cloud_samples = np.concatenate(
+            [prepared[start:end] for start, end in speech_regions],
+            dtype=np.float32,
+        )
+        text, metrics = timed_provider_transcription(
+            provider,
+            cloud_samples,
+            status=lambda value: self.events.put(
+                ("processing_stage", (session, value))
+            ),
+        )
+        metrics = RecognitionMetrics(
+            provider_id=metrics.provider_id,
+            provider_label=metrics.provider_label,
+            audio_seconds=clip.duration_seconds,
+            elapsed_seconds=metrics.elapsed_seconds,
+        )
+        text = normalize_transcript(
+            text,
+            punctuation_commands=self.config.punctuation_commands,
+        )
+        text = apply_custom_terms(text, self._active_custom_terms)
+        self.events.put(("recognition_metrics", (session, metrics)))
+        return text
+
+    def _recognize_with_local(
+        self,
+        clip: AudioClip,
+        session: int,
+    ) -> str:
+        model_name = self.computer.recommended_model
+        if self.engine.model_name != model_name:
+            self.engine.load(
+                model_name,
+                status=lambda value: self.events.put(
+                    ("processing_stage", (session, value))
+                ),
+            )
+        self._recognition_ready = True
+        self.events.put(
+            (
+                "processing_stage",
+                (
+                    session,
+                    f"Локальный Whisper {model_name.capitalize()}: "
+                    "распознаю без отправки аудио…",
+                ),
+            )
+        )
+        started = time.monotonic()
+        text = self.engine.transcribe(
+            clip.samples,
+            language=self._active_language,
+            beam_size=DECODING_BEAM_SIZES[self.config.decoding_mode],
+            custom_terms=self._active_custom_terms,
+            punctuation_commands=self.config.punctuation_commands,
+        )
+        elapsed = max(0.001, time.monotonic() - started)
+        metrics = RecognitionMetrics(
+            provider_id="local_whisper",
+            provider_label=f"Локальный Whisper {model_name.capitalize()}",
+            audio_seconds=clip.duration_seconds,
+            elapsed_seconds=elapsed,
+        )
+        self.events.put(("recognition_metrics", (session, metrics)))
+        return text
+
     def _handle_transcript(
         self,
         payload: tuple[int, str, ProcessedText],
@@ -2209,7 +2532,7 @@ class VoiceInputApp:
         self._set_tray_color(ACCENT)
 
         if not raw_text or not text:
-            self._set_status("Whisper не нашёл речи", MUTED)
+            self._set_status("Речь не найдена — попробуйте ещё раз", MUTED)
             return
 
         self.last_text.setPlainText(text)
@@ -2342,7 +2665,11 @@ class VoiceInputApp:
         self.recorder.abort()
         self._set_main_recording_feedback(False)
         self.overlay.hide()
-        self.state = "ready" if self.engine.model_name else "error"
+        self.state = (
+            "ready"
+            if self._recognition_ready or self.engine.model_name
+            else "error"
+        )
         self.record_button.setText(
             "Начать запись" if self.state == "ready" else "Ошибка"
         )
@@ -2397,10 +2724,12 @@ class VoiceInputApp:
             return
 
         self.config = AppConfig(
-            model=reverse_models.get(self.model_combo.currentText(), "base"),
-            decoding_mode=reverse_decoding.get(
-                self.decoding_combo.currentText(),
-                "fast",
+            recognition_mode="auto",
+            model=self.computer.recommended_model,
+            decoding_mode=(
+                "fast"
+                if self.engine.inference_profile.device == "cpu"
+                else "balanced"
             ),
             output_mode=reverse_modes.get(
                 self.mode_combo.currentText(),
@@ -2431,10 +2760,14 @@ class VoiceInputApp:
             use_local_ai=self.use_local_ai_check.isChecked(),
             ollama_model=self.ollama_model_edit.text().strip() or "qwen3:4b",
             beam_size=DECODING_BEAM_SIZES[
-                reverse_decoding.get(self.decoding_combo.currentText(), "fast")
+                (
+                    "fast"
+                    if self.engine.inference_profile.device == "cpu"
+                    else "balanced"
+                )
             ],
             onboarding_complete=True,
-            settings_revision=3,
+            settings_revision=6,
         )
         save_config(self.config)
         self._mark_settings_saved()
@@ -2457,13 +2790,16 @@ class VoiceInputApp:
         self._update_mode_description()
         self.onboarding_hint.hide()
         self._refresh_history()
-        if self.config.model != old_model:
+        if self.config.model != old_model and self._cloud_provider is None:
             self._load_model(self.config.model)
         else:
             self._set_status("Настройки сохранены", SUCCESS)
 
     def check_for_updates(self, manual: bool = True) -> None:
         if self._update_in_progress or self._closing:
+            return
+        if self._required_update is not None:
+            self._prompt_required_update(self._required_update)
             return
         if not self._update_repository:
             if manual:
@@ -2497,6 +2833,7 @@ class VoiceInputApp:
         update: UpdateInfo | None,
     ) -> None:
         self._update_in_progress = False
+        self.update_retry_timer.stop()
         self.update_button.setEnabled(True)
         self.update_button.setText("Проверить обновления")
 
@@ -2512,23 +2849,126 @@ class VoiceInputApp:
                 )
             return
 
-        notes = update.notes.strip()
-        if len(notes) > 700:
-            notes = notes[:697].rstrip() + "…"
-        details = f"\n\nЧто изменилось:\n{notes}" if notes else ""
-        size_mb = update.asset.size / (1024 * 1024)
-        answer = QMessageBox.question(
-            self.window,
-            "Доступно обновление",
-            f"Доступна версия {update.version} ({size_mb:.0f} МБ)."
-            f"{details}\n\nСкачать и установить?",
-        )
-        if answer != QMessageBox.StandardButton.Yes:
+        self._required_update = update
+        self._prompt_required_update(update)
+
+    def _prompt_required_update(self, update: UpdateInfo) -> None:
+        if (
+            self._closing
+            or self._update_prompt_open
+            or self._update_in_progress
+        ):
+            return
+        if (
+            self.state in {"recording", "transcribing"}
+            or self._microphone_test_running
+        ):
             self.update_status.setText(
-                f"Версия {update.version} доступна — можно установить позже."
+                f"Версия {update.version} обязательна. Покажу обновление "
+                "сразу после текущей операции."
+            )
+            QTimer.singleShot(
+                1500,
+                lambda: self._prompt_required_update(update),
             )
             return
-        self._download_update(update)
+
+        notes = update.notes.strip()
+        if len(notes) > 1200:
+            notes = notes[:1197].rstrip() + "…"
+        size_mb = update.asset.size / (1024 * 1024)
+        self.update_status.setText(
+            f"Требуется обновление до версии {update.version}."
+        )
+        self.show_window()
+
+        dialog = QMessageBox(self.window)
+        dialog.setIcon(QMessageBox.Icon.Information)
+        dialog.setWindowTitle("Требуется обновление")
+        dialog.setText(
+            f"Доступна обязательная версия {update.version} "
+            f"({size_mb:.0f} МБ)."
+        )
+        dialog.setInformativeText(
+            "Чтобы продолжить пользоваться «Речкой», скачайте и установите "
+            "обновление. Настройки и история сохранятся."
+        )
+        if notes:
+            dialog.setDetailedText(f"Что изменилось:\n{notes}")
+        install_button = dialog.addButton(
+            "Обновить сейчас",
+            QMessageBox.ButtonRole.AcceptRole,
+        )
+        exit_button = dialog.addButton(
+            "Закрыть Речку",
+            QMessageBox.ButtonRole.RejectRole,
+        )
+        dialog.setDefaultButton(install_button)
+        dialog.setEscapeButton(exit_button)
+        dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+        dialog.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+
+        self._update_prompt_open = True
+        try:
+            dialog.exec()
+        finally:
+            self._update_prompt_open = False
+
+        if dialog.clickedButton() is install_button:
+            self._download_update(update)
+        else:
+            self.exit_app()
+
+    def _required_update_retry_dialog(
+        self,
+        title: str,
+        text: str,
+        retry_label: str,
+    ) -> bool:
+        self.show_window()
+        dialog = QMessageBox(self.window)
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowTitle(title)
+        dialog.setText(text)
+        dialog.setInformativeText(
+            "Обновление обязательно. Проверьте интернет-соединение и "
+            "повторите попытку либо закройте программу."
+        )
+        retry_button = dialog.addButton(
+            retry_label,
+            QMessageBox.ButtonRole.AcceptRole,
+        )
+        exit_button = dialog.addButton(
+            "Закрыть Речку",
+            QMessageBox.ButtonRole.RejectRole,
+        )
+        dialog.setDefaultButton(retry_button)
+        dialog.setEscapeButton(exit_button)
+        dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+        dialog.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        dialog.exec()
+        if dialog.clickedButton() is retry_button:
+            return True
+        self.exit_app()
+        return False
+
+    def _handle_update_download_error(self, text: str) -> None:
+        self._reset_update_button()
+        self.update_progress.hide()
+        self.update_status.setText("Не удалось скачать обязательное обновление.")
+        if self._required_update is None:
+            QMessageBox.warning(
+                self.window,
+                "Обновление",
+                f"Не удалось скачать обновление:\n{text}",
+            )
+            return
+        if self._required_update_retry_dialog(
+            "Не удалось скачать обновление",
+            f"Не удалось скачать версию {self._required_update.version}:\n{text}",
+            "Повторить загрузку",
+        ):
+            self._download_update(self._required_update)
 
     def _download_update(self, update: UpdateInfo) -> None:
         self._update_in_progress = True
@@ -2569,13 +3009,24 @@ class VoiceInputApp:
         try:
             launch_update_installer(path)
         except Exception as exc:
+            self._reset_update_button()
+            self.update_status.setText("Автоматическая установка не запустилась.")
+            if self._required_update is not None:
+                if self._required_update_retry_dialog(
+                    "Не удалось запустить обновление",
+                    f"Не удалось запустить установщик:\n{exc}",
+                    "Повторить запуск",
+                ):
+                    QTimer.singleShot(
+                        100,
+                        lambda: self._install_downloaded_update(path),
+                    )
+                return
             QMessageBox.warning(
                 self.window,
                 "Обновление",
                 f"Не удалось запустить установщик:\n{exc}",
             )
-            self._reset_update_button()
-            self.update_status.setText("Автоматическая установка не запустилась.")
             return
         QTimer.singleShot(80, self.exit_app)
 
@@ -2752,6 +3203,8 @@ class VoiceInputApp:
             return
         self._closing = True
         self.timer.stop()
+        self.update_timer.stop()
+        self.update_retry_timer.stop()
         if self._preview_stop is not None:
             self._preview_stop.set()
         self.recorder.abort()
@@ -2836,6 +3289,7 @@ class VoiceInputApp:
                     self._set_status(text, MUTED)
             elif event == "model_ready":
                 if payload == self._model_generation:
+                    self._recognition_ready = True
                     self.state = "ready"
                     self.progress.hide()
                     self.record_button.setText("Начать запись")
@@ -2846,6 +3300,31 @@ class VoiceInputApp:
                     if not self.config.onboarding_complete and not self.start_minimized:
                         self.tabs.setCurrentIndex(1)
                         self.show_window()
+            elif event == "recognition_status":
+                if self.state == "loading":
+                    self._set_status(payload, MUTED)
+            elif event == "recognition_initialized":
+                provider, windows, public_results = payload
+                if provider is not None:
+                    self._cloud_fallback_provider = provider
+                    if self._computer_prefers_cloud():
+                        self._activate_cloud_provider(provider)
+                    else:
+                        self.runtime_summary_label.setText(
+                            "На этом компьютере встроенный Base обычно "
+                            "быстрее сетевой очереди. Бесплатный сервер "
+                            "подготовлен как автоматический резерв."
+                        )
+                        self._load_model(self.computer.recommended_model)
+                else:
+                    details = [windows.detail]
+                    details.extend(item.detail for item in public_results)
+                    self.runtime_summary_label.setText(
+                        "Сетевые службы сейчас недоступны. Включаю "
+                        "локальный резерв. " + " · ".join(details[:2])
+                    )
+                    if self._computer_prefers_cloud():
+                        self._load_model(self.computer.recommended_model)
             elif event == "model_error":
                 generation, text = payload
                 if generation == self._model_generation:
@@ -2853,6 +3332,15 @@ class VoiceInputApp:
                     self._handle_error(f"Не удалось загрузить модель: {text}")
             elif event == "transcript":
                 self._handle_transcript(payload)
+            elif event == "recognition_metrics":
+                session, metrics = payload
+                if session == self._recording_session:
+                    self._update_recognition_metrics(metrics)
+            elif event == "provider_warning":
+                # The next visible processing stage already explains that a
+                # local fallback is running. Keep the technical detail out of
+                # the transcript and UI; diagnostics can expose availability.
+                pass
             elif event == "preview":
                 session, text = payload
                 if session == self._recording_session and self.state == "recording":
@@ -2894,19 +3382,17 @@ class VoiceInputApp:
                 manual, text = payload
                 self._reset_update_button()
                 self.update_status.setText("Не удалось проверить обновления.")
+                if (
+                    self._update_repository
+                    and not self.update_retry_timer.isActive()
+                ):
+                    self.update_retry_timer.start()
                 if manual:
                     QMessageBox.warning(self.window, "Обновления", text)
             elif event == "update_progress":
                 self.update_button.setText(f"Загрузка {payload}%")
                 self.update_progress.setValue(payload)
             elif event == "update_download_error":
-                self._reset_update_button()
-                self.update_progress.hide()
-                self.update_status.setText("Не удалось скачать обновление.")
-                QMessageBox.warning(
-                    self.window,
-                    "Обновление",
-                    f"Не удалось скачать обновление:\n{payload}",
-                )
+                self._handle_update_download_error(payload)
             elif event == "update_downloaded":
                 self._install_downloaded_update(payload)

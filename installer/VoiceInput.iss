@@ -1,7 +1,7 @@
 #define MyAppName "Речка"
 #define MyAppExeName "Rechka.exe"
 #ifndef MyAppVersion
-#define MyAppVersion "0.6.2"
+#define MyAppVersion "0.7.0"
 #endif
 #ifndef MyAppSourceDir
 #define MyAppSourceDir "..\dist\VoiceInput-" + MyAppVersion + "\Rechka"
@@ -14,7 +14,7 @@ AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-AppComments=Локальный голосовой ввод на базе Whisper
+AppComments=Автоматический голосовой ввод с сетевым и локальным распознаванием
 AppReadmeFile={app}\README.md
 SetupIconFile=..\assets\voiceinput.ico
 DefaultDirName={localappdata}\Programs\Rechka
@@ -202,7 +202,7 @@ begin
 
   WizardForm.WelcomeLabel2.Caption :=
     'Говорите — Речка превратит голос в готовый текст.' + #13#10 +
-    'Работает локально, прямо на вашем компьютере.';
+    'Сама подберёт быстрый сетевой или локальный режим.';
   WizardForm.WelcomeLabel2.Left := ContentLeft + ScaleX(18);
   WizardForm.WelcomeLabel2.Top := ScaleY(103);
   WizardForm.WelcomeLabel2.Width := ContentWidth - ScaleX(18);

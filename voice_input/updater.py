@@ -148,6 +148,8 @@ def check_for_update(repository: str, current_version: str) -> UpdateInfo | None
 
     headers = {
         "Accept": "application/vnd.github+json",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
         "User-Agent": f"VoiceInput/{current_version}",
         "X-GitHub-Api-Version": "2022-11-28",
     }

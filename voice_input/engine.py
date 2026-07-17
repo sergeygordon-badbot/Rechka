@@ -289,7 +289,11 @@ class WhisperEngine:
         detected_threads = self._profile.physical_cores
         self._detected_threads = detected_threads
         self._thread_limit = cpu_threads
-        self._cpu_threads = max(1, min(detected_threads, cpu_threads or 4))
+        responsive_limit = 1 if detected_threads <= 1 else detected_threads - 1
+        self._cpu_threads = max(
+            1,
+            min(detected_threads, responsive_limit, cpu_threads or 4),
+        )
         self._lock = threading.Lock()
         self._transcribe_lock = threading.Lock()
 
@@ -338,9 +342,16 @@ class WhisperEngine:
             model_path = self._resolve_model(model_name, callback)
             if self._thread_limit is None:
                 recommended_threads = 6 if model_name == "small" else 4
+                responsive_limit = (
+                    1 if self._detected_threads <= 1 else self._detected_threads - 1
+                )
                 self._cpu_threads = max(
                     1,
-                    min(self._detected_threads, recommended_threads),
+                    min(
+                        self._detected_threads,
+                        responsive_limit,
+                        recommended_threads,
+                    ),
                 )
             profile = self._profile
             accelerator = (
