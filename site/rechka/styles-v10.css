@@ -1,5 +1,5 @@
 /* Rechka landing v7 */
-/* Landing styles v9: viewport-safe sections and a refined floating header. */
+/* Landing styles v10: refined header with plain-text navigation. */
 :root {
   --paper: #f3f1eb;
   --paper-deep: #e8e5dc;
@@ -98,28 +98,19 @@ svg {
 nav {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 26px;
   margin-left: auto;
-  padding: 4px;
-  border: 1px solid rgba(23, 24, 22, 0.08);
-  border-radius: 10px;
-  background: rgba(23, 24, 22, 0.035);
 }
 nav a {
   display: inline-flex;
   align-items: center;
-  min-height: 34px;
-  padding: 0 12px;
-  border-radius: 7px;
   color: var(--muted);
   font-size: 10px;
   font-weight: 700;
-  transition: background 150ms ease, color 150ms ease, box-shadow 150ms ease;
+  transition: color 150ms ease;
 }
 nav a:hover {
-  background: var(--white);
   color: var(--ink);
-  box-shadow: 0 2px 9px rgba(23, 24, 22, 0.07);
 }
 .top-download {
   display: inline-flex;
@@ -664,8 +655,7 @@ footer { background: var(--ink); color: var(--white); }
 .footer-inner > div a { color: #b5b7b0; font-size: 9px; }
 
 @media (max-width: 1100px) {
-  nav { gap: 2px; }
-  nav a { padding-inline: 10px; }
+  nav { gap: 18px; }
   .hero-grid { grid-template-columns: minmax(0, 0.85fr) minmax(460px, 1.15fr); gap: 44px; }
   .section-intro { grid-template-columns: 120px minmax(0, 1fr) 260px; gap: 28px; }
   .case-card { padding: 25px; }
