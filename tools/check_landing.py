@@ -24,8 +24,8 @@ EXPECTED_DOWNLOAD = (
     "https://github.com/sergeygordon-badbot/Rechka/releases/download/"
     f"v{__version__}/Rechka-Setup-{__version__}.exe"
 )
-EXPECTED_FILE_SIZE_EN = "238 MB"
-EXPECTED_FILE_SIZE_RU = "238 МБ"
+EXPECTED_FILE_SIZE_EN = "241 MB"
+EXPECTED_FILE_SIZE_RU = "241 МБ"
 
 
 class LandingParser(HTMLParser):
