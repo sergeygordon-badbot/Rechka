@@ -36,7 +36,9 @@ from voice_input.config import (
     DECODING_BEAM_SIZES,
     MODEL_OPTIONS,
     OUTPUT_MODE_OPTIONS,
+    RECOGNITION_MODE_OPTIONS,
     AppConfig,
+    data_dir,
     load_config,
     save_config,
 )
@@ -859,6 +861,28 @@ class ConfigTests(unittest.TestCase):
             else:
                 os.environ["VOICE_INPUT_DATA_DIR"] = previous
 
+    def test_legacy_data_directory_is_renamed_to_rechka(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            legacy = root / "VoiceInput"
+            legacy.mkdir()
+            (legacy / "settings.json").write_text("{}", encoding="utf-8")
+
+            with patch.dict(
+                os.environ,
+                {
+                    "LOCALAPPDATA": str(root),
+                    "RECHKA_DATA_DIR": "",
+                    "VOICE_INPUT_DATA_DIR": "",
+                },
+                clear=False,
+            ):
+                migrated = data_dir()
+
+            self.assertEqual(migrated, root / "Rechka")
+            self.assertTrue((migrated / "settings.json").is_file())
+            self.assertFalse(legacy.exists())
+
     def test_fast_mode_and_turbo_model_are_available(self) -> None:
         self.assertEqual(DECODING_BEAM_SIZES["fast"], 1)
         self.assertIn("turbo", MODEL_OPTIONS)
@@ -909,7 +933,7 @@ class ConfigTests(unittest.TestCase):
                 self.assertEqual(actual.decoding_mode, "balanced")
                 self.assertEqual(actual.hotkey, "Ctrl+Space")
                 self.assertFalse(actual.use_local_ai)
-                self.assertEqual(actual.settings_revision, 6)
+                self.assertEqual(actual.settings_revision, 7)
                 self.assertTrue(actual.onboarding_complete)
         finally:
             if previous is None:
@@ -968,6 +992,55 @@ class ConfigTests(unittest.TestCase):
             else:
                 os.environ["VOICE_INPUT_DATA_DIR"] = previous
 
+    def test_recognition_mode_and_local_profile_are_preserved(self) -> None:
+        previous = os.environ.get("VOICE_INPUT_DATA_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                os.environ["VOICE_INPUT_DATA_DIR"] = directory
+                save_config(
+                    AppConfig(
+                        recognition_mode="local",
+                        model="tiny",
+                        decoding_mode="fast",
+                    )
+                )
+
+                actual = load_config()
+
+                self.assertEqual(actual.recognition_mode, "local")
+                self.assertEqual(actual.model, "tiny")
+                self.assertEqual(actual.decoding_mode, "fast")
+                self.assertIn("cloud", RECOGNITION_MODE_OPTIONS)
+        finally:
+            if previous is None:
+                os.environ.pop("VOICE_INPUT_DATA_DIR", None)
+            else:
+                os.environ["VOICE_INPUT_DATA_DIR"] = previous
+
+    def test_invalid_recognition_mode_falls_back_to_auto(self) -> None:
+        previous = os.environ.get("VOICE_INPUT_DATA_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                os.environ["VOICE_INPUT_DATA_DIR"] = directory
+                (Path(directory) / "settings.json").write_text(
+                    json.dumps(
+                        {
+                            "recognition_mode": "unknown",
+                            "settings_revision": 7,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+                actual = load_config()
+
+                self.assertEqual(actual.recognition_mode, "auto")
+        finally:
+            if previous is None:
+                os.environ.pop("VOICE_INPUT_DATA_DIR", None)
+            else:
+                os.environ["VOICE_INPUT_DATA_DIR"] = previous
+
 
 class BuildPackagingTests(unittest.TestCase):
     def test_release_downloader_prepares_every_bundled_model(self) -> None:
@@ -1001,15 +1074,15 @@ class UpdaterTests(unittest.TestCase):
     def test_release_asset_requires_github_digest(self) -> None:
         payload = {
             "tag_name": "v0.4.0",
-            "html_url": "https://github.com/example/voiceinput/releases/tag/v0.4.0",
+            "html_url": "https://github.com/example/rechka/releases/tag/v0.4.0",
             "draft": False,
             "body": "Новый релиз",
             "assets": [
                 {
-                    "name": "VoiceInput-Setup-0.4.0.exe",
+                    "name": "Rechka-Setup-0.4.0.exe",
                     "browser_download_url": (
-                        "https://github.com/example/voiceinput/releases/download/"
-                        "v0.4.0/VoiceInput-Setup-0.4.0.exe"
+                        "https://github.com/example/rechka/releases/download/"
+                        "v0.4.0/Rechka-Setup-0.4.0.exe"
                     ),
                     "size": 123,
                     "digest": "sha256:" + "a" * 64,
@@ -1056,22 +1129,13 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual(headers["Cache-Control"], "no-cache")
         self.assertEqual(headers["Pragma"], "no-cache")
 
-    def test_update_prefers_rechka_installer_over_legacy_copy(self) -> None:
+    def test_update_accepts_rechka_installer_name(self) -> None:
         payload = {
             "tag_name": "v0.6.1",
             "html_url": "https://github.com/example/rechka/releases/tag/v0.6.1",
             "draft": False,
             "body": "",
             "assets": [
-                {
-                    "name": "VoiceInput-Setup-0.6.1.exe",
-                    "browser_download_url": (
-                        "https://github.com/example/rechka/releases/download/"
-                        "v0.6.1/VoiceInput-Setup-0.6.1.exe"
-                    ),
-                    "size": 123,
-                    "digest": "sha256:" + "a" * 64,
-                },
                 {
                     "name": "Rechka-Setup-0.6.1.exe",
                     "browser_download_url": (

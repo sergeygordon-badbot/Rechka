@@ -31,6 +31,7 @@ from voice_input.app import (  # noqa: E402
     ScrollSafeComboBox,
     VoiceInputApp,
 )
+from voice_input.config import RECOGNITION_MODE_OPTIONS  # noqa: E402
 
 
 class RenderApp(VoiceInputApp):
@@ -48,7 +49,7 @@ class RenderApp(VoiceInputApp):
         self._registered_hotkey = value or self.config.hotkey
         return True
 
-    def _refresh_devices(self) -> None:
+    def _refresh_devices(self, *, announce: bool = False) -> None:
         self.devices = []
         self.device_combo.clear()
         self.device_combo.addItem("Системный микрофон по умолчанию", None)
@@ -203,6 +204,7 @@ def render(output_dir: Path) -> dict[str, object]:
                 "width": button.width(),
                 "height": button.height(),
                 "right": top_left.x() + button.width(),
+                "visible": button.isVisible(),
             }
 
         result_actions = {
@@ -210,6 +212,22 @@ def render(output_dir: Path) -> dict[str, object]:
             "undo": button_geometry("Отменить вставку"),
             "quick_action": button_geometry("Применить"),
         }
+        auto_controls_locked = (
+            not app.model_combo.isEnabled()
+            and not app.decoding_combo.isEnabled()
+        )
+        app.recognition_mode_combo.setCurrentText(
+            RECOGNITION_MODE_OPTIONS["local"]
+        )
+        qt.processEvents()
+        local_controls_enabled = (
+            app.model_combo.isEnabled()
+            and app.decoding_combo.isEnabled()
+        )
+        app.recognition_mode_combo.setCurrentText(
+            RECOGNITION_MODE_OPTIONS["auto"]
+        )
+        qt.processEvents()
 
         class WheelProbe:
             ignored = False
@@ -262,12 +280,15 @@ def render(output_dir: Path) -> dict[str, object]:
             "save_button": button_geometry("Сохранить"),
         }
         if settings_geometry["horizontal_overflow"] != 0:
-            raise RuntimeError("Настройки переполняются по горизонтали при 760 px")
+            raise RuntimeError(
+                "Настройки переполняются по горизонтали при 760 px: "
+                f"{settings_geometry}"
+            )
         if settings_geometry["minimum_size"]["horizontal_overflow"] != 0:
             raise RuntimeError("Настройки переполняются на минимальной ширине")
-        if any(item["right"] > 760 for item in result_actions.values()):
+        if any(item["visible"] for item in result_actions.values()):
             raise RuntimeError(
-                "Действия результата выходят за границы окна: "
+                "Лишние действия результата всё ещё видимы: "
                 f"{result_actions}"
             )
         if dictation_scroll.horizontalScrollBar().maximum() != 0:
@@ -308,8 +329,24 @@ def render(output_dir: Path) -> dict[str, object]:
             raise RuntimeError("Поле результата превысило безопасную высоту")
         if app.config.hotkey != "Ctrl+Space":
             raise RuntimeError("Горячая клавиша по умолчанию должна быть Ctrl+Space")
-        if app.config.model != "base" or app.config.decoding_mode != "balanced":
-            raise RuntimeError("Профиль по умолчанию должен быть Base + Баланс")
+        if app.config.model != "base" or app.config.decoding_mode != "fast":
+            raise RuntimeError("Профиль по умолчанию должен быть Base + Быстро")
+        if not auto_controls_locked or not local_controls_enabled:
+            raise RuntimeError(
+                "Авто/локальный режим не управляет моделью и скоростью"
+            )
+        if (
+            app.record_card.parentWidget() is not app.workspace_card
+            or app.result_card.parentWidget() is not app.workspace_card
+        ):
+            raise RuntimeError("Запись и результат не объединены в одну карточку")
+        visible_label_texts = {
+            item.text()
+            for item in app.window.findChildren(QLabel)
+            if item.isVisible()
+        }
+        if {"Голос в текст", "Настройки"} & visible_label_texts:
+            raise RuntimeError("В интерфейсе остались повторяющиеся заголовки")
         if "Гастроконсьерж" in app.custom_terms_edit.placeholderText():
             raise RuntimeError("В подсказке словаря осталось название другого проекта")
         if overlay_geometry["height"] > 150:
@@ -336,9 +373,18 @@ def render(output_dir: Path) -> dict[str, object]:
             "main_navigation": main_tab_geometry,
             "screenshots": screenshots,
             "history_enabled_by_default": app.config.history_enabled,
+            "history_toggle_present": not app.history_enabled_check.isHidden(),
             "onboarding_visible": not app.config.onboarding_complete,
             "settings_geometry": settings_geometry,
             "result_actions": result_actions,
+            "recognition_mode_controls": {
+                "auto_locks_manual_profile": auto_controls_locked,
+                "local_enables_manual_profile": local_controls_enabled,
+                "options": [
+                    app.recognition_mode_combo.itemText(index)
+                    for index in range(app.recognition_mode_combo.count())
+                ],
+            },
             "dictation_geometry": {
                 "horizontal_overflow": (
                     dictation_scroll.horizontalScrollBar().maximum()

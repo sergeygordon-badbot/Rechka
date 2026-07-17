@@ -10,7 +10,14 @@ from typing import Any
 from .hotkeys import HOTKEY_OPTIONS, normalize_hotkey
 
 
-APP_DIR_NAME = "VoiceInput"
+APP_DIR_NAME = "Rechka"
+LEGACY_APP_DIR_NAME = "VoiceInput"
+
+RECOGNITION_MODE_OPTIONS = {
+    "auto": "Авто — подобрать по компьютеру",
+    "cloud": "Онлайн — быстрее, нужен интернет",
+    "local": "Локально — без отправки аудио",
+}
 
 MODEL_OPTIONS = {
     "tiny": "Tiny — самый лёгкий резерв для слабых компьютеров",
@@ -134,17 +141,28 @@ class AppConfig:
     ollama_model: str = "qwen3:4b"
     beam_size: int = 2
     onboarding_complete: bool = False
-    settings_revision: int = 6
+    settings_revision: int = 7
 
 
 def data_dir() -> Path:
-    override = os.environ.get("VOICE_INPUT_DATA_DIR")
+    override = os.environ.get("RECHKA_DATA_DIR") or os.environ.get(
+        "VOICE_INPUT_DATA_DIR"
+    )
     if override:
         return Path(override).expanduser().resolve()
 
     root = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
     if root:
-        return Path(root) / APP_DIR_NAME
+        target = Path(root) / APP_DIR_NAME
+        legacy = Path(root) / LEGACY_APP_DIR_NAME
+        if not target.exists() and legacy.is_dir():
+            try:
+                legacy.rename(target)
+            except OSError:
+                # Keep the existing settings available if Windows temporarily
+                # blocks the one-time directory migration.
+                return legacy
+        return target
     return Path.home() / f".{APP_DIR_NAME.lower()}"
 
 
@@ -189,6 +207,8 @@ def load_config() -> AppConfig:
     is_existing_before_onboarding = "onboarding_complete" not in payload
     config = AppConfig(**clean)
 
+    if config.recognition_mode not in RECOGNITION_MODE_OPTIONS:
+        config.recognition_mode = "auto"
     if config.model not in MODEL_OPTIONS:
         config.model = "base"
     elif (
@@ -214,8 +234,7 @@ def load_config() -> AppConfig:
         config.use_local_ai = False
     if is_existing_before_onboarding:
         config.onboarding_complete = True
-    config.recognition_mode = "auto"
-    config.settings_revision = 6
+    config.settings_revision = 7
     config.beam_size = DECODING_BEAM_SIZES[config.decoding_mode]
     return config
 
